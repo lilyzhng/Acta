@@ -47,7 +47,7 @@ export default function HomePage() {
           body: formData,
         });
 
-        router.push(`/project/${project.id}/transcribe`);
+        router.push(`/project/${project.id}`);
       } catch (err) {
         alert('Upload failed: ' + (err as Error).message);
       } finally {
@@ -155,7 +155,7 @@ export default function HomePage() {
             {projects.map((project) => (
               <div
                 key={project.id}
-                onClick={() => router.push(`/project/${project.id}/transcribe`)}
+                onClick={() => router.push(`/project/${project.id}`)}
                 className="flex items-center justify-between p-4 bg-neutral-900 rounded-lg hover:bg-neutral-800 cursor-pointer transition-colors border border-neutral-800"
               >
                 <div>

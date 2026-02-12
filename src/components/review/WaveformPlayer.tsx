@@ -13,11 +13,19 @@ interface WaveSurferInstance {
   on: (event: string, callback: (...args: unknown[]) => void) => void;
 }
 
+/** Segments to show as "removed" on the waveform (grayed out overlay) */
+export interface RemoveSegment {
+  start: number;
+  end: number;
+}
+
 interface WaveformPlayerProps {
   audioUrl: string;
   onTimeUpdate?: (time: number) => void;
   onReady?: (duration: number) => void;
   wsRef?: React.MutableRefObject<WaveSurferInstance | null>;
+  /** Segments marked for removal - shown as semi-transparent overlay on the waveform */
+  removeSegments?: RemoveSegment[];
 }
 
 function formatTime(sec: number): string {
@@ -31,15 +39,35 @@ export const WaveformPlayer = memo(function WaveformPlayer({
   onTimeUpdate,
   onReady,
   wsRef,
+  removeSegments = [],
 }: WaveformPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const internalRef = useRef<WaveSurferInstance | null>(null);
+  const regionsPluginRef = useRef<{ addRegion: (opts: { start: number; end: number; color?: string; drag?: boolean; resize?: boolean }) => void; clearRegions: () => void } | null>(null);
   const [time, setTime] = useState('00:00 / 00:00');
   const [speed, setSpeed] = useState(1);
   const onTimeUpdateRef = useRef(onTimeUpdate);
   const onReadyRef = useRef(onReady);
+  const removeSegmentsRef = useRef(removeSegments);
   onTimeUpdateRef.current = onTimeUpdate;
   onReadyRef.current = onReady;
+  removeSegmentsRef.current = removeSegments;
+
+  const applyRemoveRegions = useCallback(() => {
+    const regions = regionsPluginRef.current;
+    if (!regions) return;
+    const segments = removeSegmentsRef.current;
+    regions.clearRegions();
+    for (const seg of segments) {
+      regions.addRegion({
+        start: seg.start,
+        end: seg.end,
+        color: 'rgba(239, 68, 68, 0.35)',
+        drag: false,
+        resize: false,
+      });
+    }
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -47,7 +75,14 @@ export const WaveformPlayer = memo(function WaveformPlayer({
     let ws: WaveSurferInstance | null = null;
 
     const init = async () => {
-      const WaveSurfer = (await import('wavesurfer.js')).default;
+      const [WaveSurferModule, RegionsModule] = await Promise.all([
+        import('wavesurfer.js'),
+        import('wavesurfer.js/dist/plugins/regions.esm.js'),
+      ]);
+      const WaveSurfer = WaveSurferModule.default;
+      const RegionsPlugin = RegionsModule.default;
+      const regionsPlugin = RegionsPlugin.create();
+
       ws = WaveSurfer.create({
         container: containerRef.current!,
         waveColor: '#4a9eff',
@@ -58,8 +93,12 @@ export const WaveformPlayer = memo(function WaveformPlayer({
         barGap: 1,
         barRadius: 2,
         url: audioUrl,
+        // Overlay both stereo channels into one visual waveform
+        splitChannels: [{ overlay: false }, { overlay: true }],
+        plugins: [regionsPlugin],
       }) as unknown as WaveSurferInstance;
 
+      regionsPluginRef.current = regionsPlugin;
       internalRef.current = ws;
       if (wsRef) wsRef.current = ws;
 
@@ -67,6 +106,7 @@ export const WaveformPlayer = memo(function WaveformPlayer({
         const dur = ws!.getDuration();
         setTime(`00:00 / ${formatTime(dur)}`);
         onReadyRef.current?.(dur);
+        applyRemoveRegions();
       });
 
       ws.on('timeupdate', (t: unknown) => {
@@ -81,11 +121,17 @@ export const WaveformPlayer = memo(function WaveformPlayer({
 
     return () => {
       ws?.destroy();
+      regionsPluginRef.current = null;
       internalRef.current = null;
       if (wsRef) wsRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [audioUrl]);
+  }, [audioUrl, applyRemoveRegions]);
+
+  // Update regions when removeSegments changes (after waveform is ready)
+  useEffect(() => {
+    applyRemoveRegions();
+  }, [removeSegments, applyRemoveRegions]);
 
   const handleSpeedChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
     const rate = parseFloat(e.target.value);

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectDir, updateProject } from '@/lib/project-store';
+import { extractAudio } from '@/lib/ffmpeg';
 import fs from 'fs';
 import path from 'path';
 
@@ -18,10 +19,23 @@ export async function POST(
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  const filePath = path.join(dir, file.name);
-  fs.writeFileSync(filePath, buffer);
+  const videoPath = path.join(dir, file.name);
+  fs.writeFileSync(videoPath, buffer);
 
-  updateProject(id, { videoFile: file.name });
+  try {
+    updateProject(id, { videoFile: file.name, status: 'extracting_audio' });
 
-  return NextResponse.json({ success: true, fileName: file.name });
+    // Extract audio so waveform and video are available immediately (no transcription needed)
+    const audioPath = path.join(dir, 'audio.mp3');
+    extractAudio(videoPath, audioPath);
+    updateProject(id, { status: 'audio_ready', audioFile: 'audio.mp3' });
+
+    return NextResponse.json({ success: true, fileName: file.name });
+  } catch (err) {
+    updateProject(id, { status: 'uploaded' });
+    return NextResponse.json(
+      { error: (err as Error).message },
+      { status: 500 }
+    );
+  }
 }
