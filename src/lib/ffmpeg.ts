@@ -1,7 +1,7 @@
 import { execSync, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
-import type { DeleteSegment, Encoder } from '@/types';
+import type { Annotation, DeleteSegment, Encoder } from '@/types';
 
 const BUFFER_MS = 50;
 const CROSSFADE_MS = 30;
@@ -46,6 +46,30 @@ export function getVideoDuration(filePath: string): number {
     `ffprobe -v error -show_entries format=duration -of csv=p=0 "file:${filePath}"`
   ).toString().trim();
   return parseFloat(result);
+}
+
+/**
+ * Extract a single frame from a video at a given timestamp
+ * @param videoPath Path to the video file
+ * @param timestamp Time in seconds (e.g., 0, 1.5, 10.25)
+ * @param outputPath Path for the output image (should end in .jpg or .png)
+ * @param maxWidth Optional max width to resize (maintains aspect ratio)
+ * @returns Path to the extracted frame
+ */
+export function extractFrame(
+  videoPath: string,
+  timestamp: number,
+  outputPath: string,
+  maxWidth?: number
+): string {
+  const scaleFilter = maxWidth ? `-vf "scale=${maxWidth}:-1"` : '';
+  
+  execSync(
+    `ffmpeg -y -ss ${timestamp} -i "file:${videoPath}" -frames:v 1 ${scaleFilter} -q:v 2 "file:${outputPath}"`,
+    { stdio: 'pipe' }
+  );
+  
+  return outputPath;
 }
 
 export function getVideoInfo(filePath: string): { duration: number; width: number; height: number; fps: number } {
@@ -307,5 +331,341 @@ export function burnSubtitles(
     proc.on('error', (err) => {
       resolve({ success: false, error: err.message });
     });
+  });
+}
+
+/**
+ * Convert an annotation to a PNG overlay image
+ * Returns the path to the generated PNG file
+ */
+export function annotationToPng(
+  annotation: Annotation,
+  outputDir: string,
+  videoWidth: number,
+  videoHeight: number
+): { path: string; x: number; y: number; width: number; height: number } {
+  const pngPath = path.join(outputDir, `annotation_${annotation.id}.png`);
+  
+  // Calculate actual pixel position
+  const x = Math.round((annotation.position.x / 100) * videoWidth);
+  const y = Math.round((annotation.position.y / 100) * videoHeight);
+  
+  // Determine size - scale based on video dimensions
+  // Base sizes are percentages of the smaller video dimension
+  const minDimension = Math.min(videoWidth, videoHeight);
+  const sizePercents: Record<string, number> = { small: 0.12, medium: 0.20, large: 0.32 };
+  const sizePercent = sizePercents[annotation.style.size] || 0.20;
+  const baseSize = Math.round(minDimension * sizePercent);
+  
+  // Use explicit svgWidth/Height if provided, otherwise use scaled size
+  let width = annotation.svgWidth ? Math.round(annotation.svgWidth * (minDimension / 1000)) : baseSize;
+  let height = annotation.svgHeight ? Math.round(annotation.svgHeight * (minDimension / 1000)) : baseSize;
+  
+  // Ensure minimum size for visibility
+  width = Math.max(width, 50);
+  height = Math.max(height, 50);
+  
+  // Build complete SVG
+  let svgContent: string;
+  const color = annotation.style.color || 'yellow';
+  
+  if (annotation.type === 'custom_svg' && annotation.svgContent) {
+    // Strip CDATA wrappers if present - they break rsvg-convert
+    let cleanedContent = annotation.svgContent
+      .replace(/<!\[CDATA\[/g, '')
+      .replace(/\]\]>/g, '');
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${annotation.svgViewBox || '0 0 100 100'}">${cleanedContent}</svg>`;
+  } else if (annotation.type === 'arrow') {
+    // Generate arrow SVG based on direction
+    const arrowPaths: Record<string, string> = {
+      'up': 'M50,80 L50,20 M30,40 L50,20 L70,40',
+      'down': 'M50,20 L50,80 M30,60 L50,80 L70,60',
+      'left': 'M80,50 L20,50 M40,30 L20,50 L40,70',
+      'right': 'M20,50 L80,50 M60,30 L80,50 L60,70',
+      'up-left': 'M75,75 L25,25 M25,55 L25,25 L55,25',
+      'up-right': 'M25,75 L75,25 M45,25 L75,25 L75,55',
+      'down-left': 'M75,25 L25,75 M25,45 L25,75 L55,75',
+      'down-right': 'M25,25 L75,75 M45,75 L75,75 L75,45',
+    };
+    const d = arrowPaths[annotation.arrowDirection || 'right'] || arrowPaths['right'];
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
+      <path d="${d}" stroke="${color}" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>`;
+  } else if (annotation.type === 'circle') {
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="40" stroke="${color}" stroke-width="4" fill="none"/>
+    </svg>`;
+  } else if (annotation.type === 'box') {
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
+      <rect x="10" y="10" width="80" height="80" stroke="${color}" stroke-width="4" fill="none"/>
+    </svg>`;
+  } else if (annotation.type === 'text' && annotation.text) {
+    // For text, we'll use a different approach with FFmpeg drawtext
+    // Return a transparent placeholder
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>`;
+    width = 1;
+    height = 1;
+  } else if (annotation.type === 'spotlight') {
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
+      <defs>
+        <radialGradient id="spotlight_${annotation.id}" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" style="stop-color:${color};stop-opacity:0.3"/>
+          <stop offset="100%" style="stop-color:${color};stop-opacity:0"/>
+        </radialGradient>
+      </defs>
+      <circle cx="50" cy="50" r="48" fill="url(#spotlight_${annotation.id})"/>
+    </svg>`;
+  } else {
+    // Fallback
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
+      <circle cx="50" cy="50" r="40" stroke="${color}" stroke-width="4" fill="none"/>
+    </svg>`;
+  }
+  
+  // Write SVG to temp file
+  const svgPath = path.join(outputDir, `annotation_${annotation.id}.svg`);
+  fs.writeFileSync(svgPath, svgContent);
+  
+  // Convert SVG to PNG using rsvg-convert or fallback methods
+  // Try multiple paths for rsvg-convert
+  const rsvgPaths = [
+    '/opt/homebrew/bin/rsvg-convert',
+    '/usr/local/bin/rsvg-convert',
+    'rsvg-convert',
+  ];
+  
+  let converted = false;
+  for (const rsvgPath of rsvgPaths) {
+    try {
+      execSync(`"${rsvgPath}" -w ${width} -h ${height} "${svgPath}" -o "${pngPath}"`, { stdio: 'pipe' });
+      // Verify PNG was created
+      if (fs.existsSync(pngPath) && fs.statSync(pngPath).size > 0) {
+        converted = true;
+        break;
+      }
+    } catch {
+      // Try next path
+    }
+  }
+  
+  if (!converted) {
+    try {
+      // Fallback to ImageMagick convert
+      execSync(`convert -background none "${svgPath}" -resize ${width}x${height} "${pngPath}"`, { stdio: 'pipe' });
+      if (fs.existsSync(pngPath) && fs.statSync(pngPath).size > 0) {
+        converted = true;
+      }
+    } catch {
+      // Continue to next fallback
+    }
+  }
+  
+  if (!converted) {
+    // Last resort: create a simple colored shape with FFmpeg
+    try {
+      // Create a simple colored circle as fallback
+      const fallbackColor = color.replace('#', '').toLowerCase();
+      execSync(`ffmpeg -y -f lavfi -i "color=c=${fallbackColor}:size=${width}x${height}:d=1,format=rgba" -frames:v 1 "${pngPath}"`, { stdio: 'pipe' });
+      if (fs.existsSync(pngPath) && fs.statSync(pngPath).size > 0) {
+        converted = true;
+      }
+    } catch (e) {
+      console.error(`Failed to convert SVG to PNG for annotation ${annotation.id}:`, e);
+    }
+  }
+  
+  // Final check - if PNG doesn't exist, throw an error
+  if (!fs.existsSync(pngPath)) {
+    throw new Error(`Failed to create PNG overlay for annotation ${annotation.id}`);
+  }
+  
+  // Clean up SVG
+  try { fs.unlinkSync(svgPath); } catch { /* ignore */ }
+  
+  // Center the annotation on the position
+  const overlayX = Math.max(0, x - Math.round(width / 2));
+  const overlayY = Math.max(0, y - Math.round(height / 2));
+  
+  return { path: pngPath, x: overlayX, y: overlayY, width, height };
+}
+
+/**
+ * Burn annotations into video using FFmpeg overlay filters
+ */
+export function burnAnnotations(
+  videoPath: string,
+  annotations: Annotation[],
+  outputPath: string,
+  onProgress?: (data: { frame: number; totalFrames: number; percent: number; speed: number; fps: number; elapsed: number; remaining: number }) => void
+): Promise<{ success: boolean; path?: string; elapsed?: string; error?: string }> {
+  return new Promise((resolve) => {
+    if (annotations.length === 0) {
+      // No annotations, just copy the video
+      try {
+        fs.copyFileSync(videoPath, outputPath);
+        resolve({ success: true, path: outputPath, elapsed: '0' });
+      } catch (err) {
+        resolve({ success: false, error: (err as Error).message });
+      }
+      return;
+    }
+    
+    // Get video info
+    let videoWidth = 1920;
+    let videoHeight = 1080;
+    let totalFrames = 0;
+    let fps = 30;
+    let duration = 0;
+    
+    try {
+      const info = getVideoInfo(videoPath);
+      videoWidth = info.width;
+      videoHeight = info.height;
+      fps = info.fps;
+      duration = info.duration;
+      totalFrames = Math.round(duration * fps);
+    } catch {
+      // Use defaults
+    }
+    
+    // Create temp directory for PNG overlays
+    const tmpDir = path.join(path.dirname(outputPath), `tmp_annotations_${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    
+    try {
+      // Convert annotations to PNG overlays
+      const overlays: Array<{
+        path: string;
+        x: number;
+        y: number;
+        startTime?: number;
+        endTime?: number;
+      }> = [];
+      
+      for (const ann of annotations) {
+        // Skip text annotations for now (would need drawtext)
+        if (ann.type === 'text') continue;
+        
+        try {
+          const overlay = annotationToPng(ann, tmpDir, videoWidth, videoHeight);
+          // Verify the PNG exists
+          if (fs.existsSync(overlay.path)) {
+            overlays.push({
+              ...overlay,
+              startTime: ann.startTime,
+              endTime: ann.endTime ?? duration,
+            });
+            console.log(`Created PNG overlay for annotation ${ann.id}: ${overlay.path}`);
+          } else {
+            console.error(`PNG not created for annotation ${ann.id}`);
+          }
+        } catch (err) {
+          console.error(`Failed to create PNG for annotation ${ann.id}:`, err);
+        }
+      }
+      
+      if (overlays.length === 0) {
+        // No overlays to apply
+        fs.copyFileSync(videoPath, outputPath);
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        resolve({ success: true, path: outputPath, elapsed: '0' });
+        return;
+      }
+      
+      // Build FFmpeg filter complex
+      // Input 0: video, Input 1-N: overlay PNGs
+      const inputs: string[] = ['-i', videoPath];
+      overlays.forEach(o => {
+        inputs.push('-i', o.path);
+      });
+      
+      // Build filter chain
+      let filterComplex = '';
+      let lastOutput = '[0:v]';
+      
+      overlays.forEach((o, i) => {
+        const inputIdx = i + 1;
+        const outputLabel = i === overlays.length - 1 ? '[vout]' : `[v${i}]`;
+        
+        // Enable expression for timing
+        let enable = '';
+        if (o.startTime !== undefined || o.endTime !== undefined) {
+          const start = o.startTime ?? 0;
+          const end = o.endTime ?? duration;
+          enable = `:enable='between(t,${start},${end})'`;
+        }
+        
+        filterComplex += `${lastOutput}[${inputIdx}:v]overlay=${o.x}:${o.y}${enable}${outputLabel};`;
+        lastOutput = outputLabel;
+      });
+      
+      // Remove trailing semicolon
+      filterComplex = filterComplex.slice(0, -1);
+      
+      const encoder = detectEncoder();
+      const args = [
+        ...inputs,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]',
+        '-map', '0:a?',
+        '-c:v', encoder.name,
+        ...encoder.args.split(' '),
+        '-c:a', 'aac', '-b:a', '192k',
+        '-y',
+        outputPath,
+      ];
+      
+      console.log('FFmpeg burn annotations command:', 'ffmpeg', args.join(' '));
+      console.log('Filter complex:', filterComplex);
+      console.log('Overlays:', overlays.map(o => ({ path: o.path, x: o.x, y: o.y, start: o.startTime, end: o.endTime })));
+      
+      const startTime = Date.now();
+      const proc = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
+      
+      let stderrOutput = '';
+      proc.stderr.on('data', (data: Buffer) => {
+        const line = data.toString();
+        stderrOutput += line;
+        
+        if (!onProgress) return;
+        const frameMatch = line.match(/frame=\s*(\d+)/);
+        const speedMatch = line.match(/speed=\s*([\d.]+)x/);
+        const fpsMatch = line.match(/fps=\s*([\d.]+)/);
+        if (frameMatch) {
+          const frame = parseInt(frameMatch[1]);
+          const speed = speedMatch ? parseFloat(speedMatch[1]) : 0;
+          const fpsVal = fpsMatch ? parseFloat(fpsMatch[1]) : 0;
+          const percent = totalFrames > 0 ? Math.min(99, Math.round((frame / totalFrames) * 100)) : 0;
+          const elapsed = (Date.now() - startTime) / 1000;
+          const remaining = percent > 0 ? Math.round((elapsed / percent) * (100 - percent)) : 0;
+          onProgress({ frame, totalFrames, percent, speed, fps: fpsVal, elapsed: Math.round(elapsed), remaining });
+        }
+      });
+      
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          console.error('FFmpeg burn annotations failed with code:', code);
+          console.error('FFmpeg stderr:', stderrOutput.slice(-2000)); // Last 2000 chars
+        }
+        // Clean up temp directory
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        if (code === 0) {
+          resolve({ success: true, path: outputPath, elapsed });
+        } else {
+          resolve({ success: false, error: `FFmpeg exit code ${code}` });
+        }
+      });
+      
+      proc.on('error', (err) => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        resolve({ success: false, error: err.message });
+      });
+      
+    } catch (err) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      resolve({ success: false, error: (err as Error).message });
+    }
   });
 }

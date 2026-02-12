@@ -4,8 +4,9 @@ import { useRef, useCallback, useState, useEffect, useMemo } from 'react';
 import { WaveformPlayer } from '@/components/review/WaveformPlayer';
 import { WordSelector } from '@/components/review/WordSelector';
 import { SubtitleItem } from '@/components/subtitles/SubtitleItem';
+import { AnnotationOverlay } from '@/components/annotations/AnnotationOverlay';
 import { indicesToDeleteSegments } from '@/lib/segment-merger';
-import type { SubtitleWord, Subtitle } from '@/types';
+import type { SubtitleWord, Subtitle, Annotation } from '@/types';
 
 interface WaveSurferInstance {
   destroy: () => void;
@@ -25,6 +26,7 @@ interface UnifiedProjectPanelProps {
 
 export function UnifiedProjectPanel({ projectId, refreshTrigger }: UnifiedProjectPanelProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WaveSurferInstance | null>(null);
   const [hasAudio, setHasAudio] = useState<boolean | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -42,6 +44,9 @@ export function UnifiedProjectPanel({ projectId, refreshTrigger }: UnifiedProjec
   const [activeSubtitleIndex, setActiveSubtitleIndex] = useState(-1);
   const [isBurning, setIsBurning] = useState(false);
   const [burnProgress, setBurnProgress] = useState(0);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [videoTime, setVideoTime] = useState(0);
+  const [videoContainerSize, setVideoContainerSize] = useState({ width: 0, height: 0 });
   const subtitleListRef = useRef<HTMLDivElement>(null);
   const subtitlesLoadedRef = useRef(false); // Track if subtitles were loaded from server
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -127,16 +132,69 @@ export function UnifiedProjectPanel({ projectId, refreshTrigger }: UnifiedProjec
       .catch(() => setHasAudio(false));
   }, [projectId]);
 
+  // Fetch annotations
+  const fetchAnnotations = useCallback(() => {
+    fetch(`/api/annotations?projectId=${projectId}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setAnnotations(data);
+        }
+      })
+      .catch(() => setAnnotations([]));
+  }, [projectId]);
+
   useEffect(() => {
     fetchProject();
-  }, [fetchProject]);
+    fetchAnnotations();
+  }, [fetchProject, fetchAnnotations]);
 
   // Refresh when triggered by panel events from chat
   useEffect(() => {
     if (refreshTrigger) {
       fetchProject();
+      fetchAnnotations();
     }
-  }, [refreshTrigger, fetchProject]);
+  }, [refreshTrigger, fetchProject, fetchAnnotations]);
+
+  // Track video container size for annotation positioning
+  useEffect(() => {
+    const updateSize = () => {
+      if (videoContainerRef.current) {
+        const rect = videoContainerRef.current.getBoundingClientRect();
+        setVideoContainerSize({ width: rect.width, height: rect.height });
+      }
+    };
+    
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    
+    // Also update when video loads
+    const video = videoRef.current;
+    if (video) {
+      video.addEventListener('loadedmetadata', updateSize);
+    }
+    
+    return () => {
+      window.removeEventListener('resize', updateSize);
+      if (video) {
+        video.removeEventListener('loadedmetadata', updateSize);
+      }
+    };
+  }, [videoKey]);
+
+  // Track video playback time for annotations
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    
+    const handleTimeUpdate = () => {
+      setVideoTime(video.currentTime);
+    };
+    
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    return () => video.removeEventListener('timeupdate', handleTimeUpdate);
+  }, [videoKey]);
 
   // Force video reload when cut completes
   useEffect(() => {
@@ -429,14 +487,26 @@ export function UnifiedProjectPanel({ projectId, refreshTrigger }: UnifiedProjec
               Cut complete - filler words removed
             </div>
           )}
-          <video
-            key={`video-${videoKey}`}
-            ref={videoRef}
-            className="w-full max-h-[70vh] bg-black rounded-lg object-contain"
-            src={videoUrl}
-            playsInline
-            muted
-          />
+          {/* Video container with annotation overlay */}
+          <div ref={videoContainerRef} className="relative">
+            <video
+              key={`video-${videoKey}`}
+              ref={videoRef}
+              className="w-full max-h-[70vh] bg-black rounded-lg object-contain"
+              src={videoUrl}
+              playsInline
+              muted
+            />
+            {/* Annotation overlay */}
+            {annotations.length > 0 && videoContainerSize.width > 0 && (
+              <AnnotationOverlay
+                annotations={annotations}
+                currentTime={videoTime}
+                containerWidth={videoContainerSize.width}
+                containerHeight={videoContainerSize.height}
+              />
+            )}
+          </div>
         </div>
 
         {/* Waveform */}

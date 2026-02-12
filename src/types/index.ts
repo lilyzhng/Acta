@@ -16,6 +16,33 @@ export interface Subtitle {
   end: number;
 }
 
+export type AnnotationType = 'arrow' | 'circle' | 'box' | 'text' | 'spotlight' | 'custom_svg';
+export type AnnotationSize = 'small' | 'medium' | 'large';
+export type AnnotationAnimation = 'none' | 'pulse' | 'bounce' | 'fade-in';
+export type ArrowDirection = 'up' | 'down' | 'left' | 'right' | 'up-left' | 'up-right' | 'down-left' | 'down-right';
+
+export interface Annotation {
+  id: string;
+  type: AnnotationType;
+  position: { x: number; y: number }; // percentage 0-100
+  startTime?: number;  // seconds, omit for whole video
+  endTime?: number;
+  style: {
+    color: string;     // hex or named color
+    size: AnnotationSize;
+    animation?: AnnotationAnimation;
+  };
+  // Type-specific properties
+  text?: string;              // for text type
+  arrowDirection?: ArrowDirection; // for arrow type
+  target?: string;            // original user description for reference
+  // Custom SVG properties
+  svgContent?: string;        // raw SVG elements for custom_svg type
+  svgViewBox?: string;        // viewBox for custom SVG (e.g., "0 0 100 100")
+  svgWidth?: number;          // width in pixels
+  svgHeight?: number;         // height in pixels
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -33,6 +60,7 @@ export interface Project {
   subtitlesWithTime?: string; // filename
   srtFile?: string;
   burnedVideoFile?: string;
+  annotationsFile?: string; // filename for annotations.json
 }
 
 export type ProjectStatus =

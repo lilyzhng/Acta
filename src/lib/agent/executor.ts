@@ -1,14 +1,16 @@
 import fs from 'fs';
 import path from 'path';
+import { randomUUID } from 'crypto';
 import { getProject, getProjectDir, updateProject } from '@/lib/project-store';
-import { extractAudio, executeFFmpegCut, burnSubtitles, getVideoDuration } from '@/lib/ffmpeg';
+import { extractAudio, executeFFmpegCut, burnSubtitles, burnAnnotations, getVideoDuration, extractFrame } from '@/lib/ffmpeg';
 import { uploadToUguu } from '@/lib/upload';
 import { submitTranscription, queryTranscription } from '@/lib/volcengine';
 import { generateSubtitleWords, groupIntoSubtitlesByUtterance } from '@/lib/subtitles';
 import { generateSRT, generateReadableTranscript } from '@/lib/srt';
 import { runHybridAnalysis } from '@/lib/analysis';
 import { indicesToDeleteSegments } from '@/lib/segment-merger';
-import type { VolcengineResult, SubtitleWord, Subtitle, DeleteSegment, SubtaskStatus } from '@/types';
+import { analyzeFrameForPositions } from '@/lib/vision';
+import type { VolcengineResult, SubtitleWord, Subtitle, DeleteSegment, SubtaskStatus, Annotation, AnnotationType, AnnotationSize, AnnotationAnimation, ArrowDirection } from '@/types';
 
 type ProgressCallback = (data: { id: string; percent: number; message?: string; subtasks?: SubtaskStatus[] }) => void;
 
@@ -49,6 +51,18 @@ export async function executeTool(
       return executeShowSubtitleEditor(projectId);
     case 'provide_download_links':
       return executeProvideDownloadLinks(projectId);
+    case 'add_annotation':
+      return executeAddAnnotation(projectId, input);
+    case 'list_annotations':
+      return executeListAnnotations(projectId);
+    case 'remove_annotation':
+      return executeRemoveAnnotation(projectId, input);
+    case 'analyze_frame':
+      return executeAnalyzeFrame(projectId, input);
+    case 'update_annotation':
+      return executeUpdateAnnotation(projectId, input);
+    case 'save_video':
+      return executeSaveVideo(projectId, toolCallId, onProgress);
     default:
       return { result: `Unknown tool: ${toolName}` };
   }
@@ -670,4 +684,399 @@ async function executeProvideDownloadLinks(projectId: string): Promise<ToolResul
       },
     },
   };
+}
+
+// ===== Annotation Tools =====
+
+function loadAnnotations(projectId: string): Annotation[] {
+  const dir = getProjectDir(projectId);
+  const annotationsPath = path.join(dir, 'annotations.json');
+  if (fs.existsSync(annotationsPath)) {
+    return JSON.parse(fs.readFileSync(annotationsPath, 'utf8'));
+  }
+  return [];
+}
+
+function saveAnnotations(projectId: string, annotations: Annotation[]): void {
+  const dir = getProjectDir(projectId);
+  const annotationsPath = path.join(dir, 'annotations.json');
+  fs.writeFileSync(annotationsPath, JSON.stringify(annotations, null, 2));
+  updateProject(projectId, { annotationsFile: 'annotations.json' });
+}
+
+async function executeAddAnnotation(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const type = input.type as AnnotationType;
+  const target = input.target as string;
+  const x = input.x as number;
+  const y = input.y as number;
+  const startTime = input.startTime as number | undefined;
+  const endTime = input.endTime as number | undefined;
+  const color = (input.color as string) || 'yellow';
+  const size = (input.size as AnnotationSize) || 'medium';
+  const animation = (input.animation as AnnotationAnimation) || 'none';
+  const text = input.text as string | undefined;
+  const arrowDirection = input.arrowDirection as ArrowDirection | undefined;
+  
+  // Custom SVG fields
+  const svgContent = input.svgContent as string | undefined;
+  const svgViewBox = (input.svgViewBox as string) || '0 0 100 100';
+  
+  // Size presets for custom SVG (if explicit width/height not provided)
+  const SVG_SIZE_PRESETS = { small: 120, medium: 200, large: 320 };
+  const sizePreset = SVG_SIZE_PRESETS[size] || 200;
+  const svgWidth = (input.svgWidth as number) || sizePreset;
+  const svgHeight = (input.svgHeight as number) || sizePreset;
+
+  const annotation: Annotation = {
+    id: randomUUID().slice(0, 8),
+    type,
+    position: { x, y },
+    startTime,
+    endTime,
+    style: { color, size, animation },
+    text,
+    arrowDirection,
+    target,
+    // Include SVG fields only for custom_svg type
+    ...(type === 'custom_svg' && {
+      svgContent,
+      svgViewBox,
+      svgWidth,
+      svgHeight,
+    }),
+  };
+
+  const annotations = loadAnnotations(projectId);
+  annotations.push(annotation);
+  saveAnnotations(projectId, annotations);
+
+  const timingDesc = startTime !== undefined
+    ? endTime !== undefined
+      ? `from ${startTime}s to ${endTime}s`
+      : `starting at ${startTime}s`
+    : 'for the whole video';
+
+  const typeDesc = type === 'custom_svg' ? 'custom SVG' : type;
+
+  return {
+    result: `Added ${typeDesc} annotation (ID: ${annotation.id}) at position (${x}%, ${y}%) ${timingDesc}. Target: "${target}".`,
+    emitEvent: {
+      type: 'ui_panel',
+      panel: 'annotations_updated',
+      data: { annotations },
+    },
+  };
+}
+
+async function executeListAnnotations(projectId: string): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const annotations = loadAnnotations(projectId);
+
+  if (annotations.length === 0) {
+    return { result: 'No annotations on this video.' };
+  }
+
+  const list = annotations.map(a => {
+    const timing = a.startTime !== undefined
+      ? a.endTime !== undefined
+        ? `${a.startTime}s-${a.endTime}s`
+        : `from ${a.startTime}s`
+      : 'whole video';
+    return `- ID: ${a.id}, Type: ${a.type}, Position: (${a.position.x}%, ${a.position.y}%), Timing: ${timing}, Target: "${a.target}"`;
+  }).join('\n');
+
+  return { result: `${annotations.length} annotation(s):\n${list}` };
+}
+
+async function executeRemoveAnnotation(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const id = input.id as string;
+  if (!id) return { result: 'Please provide the annotation ID to remove.' };
+
+  const annotations = loadAnnotations(projectId);
+  const index = annotations.findIndex(a => a.id === id);
+
+  if (index === -1) {
+    return { result: `Annotation with ID "${id}" not found.` };
+  }
+
+  const removed = annotations[index];
+  annotations.splice(index, 1);
+  saveAnnotations(projectId, annotations);
+
+  return {
+    result: `Removed ${removed.type} annotation (ID: ${id}).`,
+    emitEvent: {
+      type: 'ui_panel',
+      panel: 'annotations_updated',
+      data: { annotations },
+    },
+  };
+}
+
+async function executeUpdateAnnotation(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const id = input.id as string;
+  if (!id) return { result: 'Please provide the annotation ID to update.' };
+
+  const annotations = loadAnnotations(projectId);
+  const index = annotations.findIndex(a => a.id === id);
+
+  if (index === -1) {
+    return { result: `Annotation with ID "${id}" not found.` };
+  }
+
+  const annotation = annotations[index];
+  const updates: string[] = [];
+
+  // Update position
+  if (input.x !== undefined) {
+    annotation.position.x = input.x as number;
+    updates.push(`x=${input.x}%`);
+  }
+  if (input.y !== undefined) {
+    annotation.position.y = input.y as number;
+    updates.push(`y=${input.y}%`);
+  }
+
+  // Update timing
+  if (input.startTime !== undefined) {
+    annotation.startTime = input.startTime as number;
+    updates.push(`startTime=${input.startTime}s`);
+  }
+  if (input.endTime !== undefined) {
+    annotation.endTime = input.endTime as number;
+    updates.push(`endTime=${input.endTime}s`);
+  }
+
+  // Update style
+  if (input.color !== undefined) {
+    const newColor = input.color as string;
+    annotation.style.color = newColor;
+    
+    // For custom_svg, also update colors in the SVG content itself
+    if (annotation.type === 'custom_svg' && annotation.svgContent) {
+      // Replace stroke and fill colors in SVG content
+      // Match stroke="..." and fill="..." (but not fill="none")
+      annotation.svgContent = annotation.svgContent
+        .replace(/stroke="(?!none)[^"]+"/g, `stroke="${newColor}"`)
+        .replace(/fill="(?!none|url)[^"]+"/g, `fill="${newColor}"`);
+    }
+    
+    updates.push(`color=${input.color}`);
+  }
+  if (input.animation !== undefined) {
+    annotation.style.animation = input.animation as AnnotationAnimation;
+    updates.push(`animation=${input.animation}`);
+  }
+
+  // Update size (affects both style.size and SVG dimensions for custom_svg)
+  const SVG_SIZE_PRESETS: Record<string, number> = { small: 120, medium: 200, large: 320 };
+  if (input.size !== undefined) {
+    const newSize = input.size as AnnotationSize;
+    annotation.style.size = newSize;
+    // Also update SVG dimensions if it's a custom_svg
+    if (annotation.type === 'custom_svg') {
+      const preset = SVG_SIZE_PRESETS[newSize] || 200;
+      annotation.svgWidth = preset;
+      annotation.svgHeight = preset;
+    }
+    updates.push(`size=${input.size}`);
+  }
+
+  // Update explicit SVG dimensions (overrides size preset)
+  if (input.svgWidth !== undefined) {
+    annotation.svgWidth = input.svgWidth as number;
+    updates.push(`svgWidth=${input.svgWidth}px`);
+  }
+  if (input.svgHeight !== undefined) {
+    annotation.svgHeight = input.svgHeight as number;
+    updates.push(`svgHeight=${input.svgHeight}px`);
+  }
+
+  // Replace SVG content entirely (for custom_svg type)
+  if (input.svgContent !== undefined && annotation.type === 'custom_svg') {
+    annotation.svgContent = input.svgContent as string;
+    updates.push('svgContent replaced');
+  }
+
+  if (updates.length === 0) {
+    return { result: `No changes specified for annotation "${id}".` };
+  }
+
+  saveAnnotations(projectId, annotations);
+
+  return {
+    result: `Updated annotation "${id}": ${updates.join(', ')}.`,
+    emitEvent: {
+      type: 'ui_panel',
+      panel: 'annotations_updated',
+      data: { annotations },
+    },
+  };
+}
+
+// ===== Vision Analysis Tool =====
+
+async function executeAnalyzeFrame(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const timestamp = (input.timestamp as number) ?? 0;
+  const query = input.query as string;
+
+  if (!query) {
+    return { result: 'Please provide a query describing what elements to find in the frame.' };
+  }
+
+  const dir = getProjectDir(projectId);
+  
+  // Determine which video to analyze (prefer cut video if available, else original)
+  const videoFileName = project.cutVideoFile || project.videoFile;
+  const videoPath = path.join(dir, videoFileName);
+
+  if (!fs.existsSync(videoPath)) {
+    return { result: 'Video file not found.' };
+  }
+
+  // Extract frame at the specified timestamp
+  const frameFileName = `frame_${timestamp.toFixed(2).replace('.', '_')}.jpg`;
+  const framePath = path.join(dir, frameFileName);
+
+  try {
+    // Extract frame with reasonable size for vision API (max 1280px width)
+    extractFrame(videoPath, timestamp, framePath, 1280);
+
+    if (!fs.existsSync(framePath)) {
+      return { result: 'Failed to extract frame from video.' };
+    }
+
+    // Send to Gemini for analysis
+    const result = await analyzeFrameForPositions({
+      imagePath: framePath,
+      query,
+    });
+
+    // Clean up frame file (optional - could keep for debugging)
+    // fs.unlinkSync(framePath);
+
+    if (result.positions.length === 0) {
+      return {
+        result: `Frame analysis at ${timestamp}s: Could not detect specific positions. ${result.description || 'Try being more specific about what to find.'}`,
+      };
+    }
+
+    // Format positions for Claude to use
+    const positionsList = result.positions
+      .map(p => `- ${p.label}: x=${p.x.toFixed(1)}%, y=${p.y.toFixed(1)}% (confidence: ${p.confidence})`)
+      .join('\n');
+
+    return {
+      result: `Frame analysis at ${timestamp}s:\n${positionsList}\n\nDescription: ${result.description || 'Elements detected successfully.'}\n\nUse these coordinates with add_annotation to create precise annotations.`,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    // Check for common issues
+    if (errorMessage.includes('OPENROUTER_API_KEY')) {
+      return { result: 'OpenRouter API key not configured. Please add OPENROUTER_API_KEY to .env.local.' };
+    }
+    
+    return { result: `Frame analysis failed: ${errorMessage}` };
+  }
+}
+
+// ===== Save Video Tool (Burn Annotations) =====
+
+async function executeSaveVideo(
+  projectId: string,
+  toolCallId: string,
+  onProgress?: (p: ProgressEvent) => void,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const dir = getProjectDir(projectId);
+  const annotations = loadAnnotations(projectId);
+  
+  // For input, always use the cut video (or original if no cut exists)
+  // Never use burnedVideoFile as input to avoid in-place editing issues
+  const inputVideoFile = project.cutVideoFile || project.videoFile;
+  const inputVideoPath = path.join(dir, inputVideoFile);
+  
+  if (!fs.existsSync(inputVideoPath)) {
+    return { result: 'Video file not found.' };
+  }
+  
+  if (annotations.length === 0) {
+    // No annotations - provide download link for best available video
+    const downloadFile = project.burnedVideoFile || project.cutVideoFile || project.videoFile;
+    const downloadUrl = `/api/projects/${projectId}/download?file=${encodeURIComponent(downloadFile)}`;
+    
+    return {
+      result: `No annotations to burn. Here's your video download link:\n\n**[Download Video](${downloadUrl})**`,
+    };
+  }
+
+  // Output path - use a unique timestamp to avoid overwriting
+  const baseName = path.basename(inputVideoFile, '.mp4');
+  const timestamp = Date.now();
+  const outputFileName = `${baseName}_annotated_${timestamp}.mp4`;
+  const outputPath = path.join(dir, outputFileName);
+
+  try {
+    const result = await burnAnnotations(
+      inputVideoPath,
+      annotations,
+      outputPath,
+      (progress) => {
+        if (onProgress) {
+          onProgress({
+            type: 'progress',
+            toolCallId,
+            data: { percent: progress.percent, stage: 'Burning annotations' },
+          });
+        }
+      }
+    );
+
+    if (result.success) {
+      // Update project with the annotated video
+      updateProject(projectId, {
+        burnedVideoFile: outputFileName,
+      });
+
+      const downloadUrl = `/api/projects/${projectId}/download?file=${encodeURIComponent(outputFileName)}`;
+
+      return {
+        result: `Video saved with ${annotations.length} annotation(s) burned in! (took ${result.elapsed}s)\n\n**[Download Video](${downloadUrl})**\n\nFile: ${outputFileName}`,
+      };
+    } else {
+      return { result: `Video export failed: ${result.error}` };
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { result: `Video export failed: ${errorMessage}` };
+  }
 }
