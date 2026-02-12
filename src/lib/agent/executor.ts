@@ -9,7 +9,7 @@ import { generateSubtitleWords, groupIntoSubtitlesByUtterance } from '@/lib/subt
 import { generateSRT, generateReadableTranscript } from '@/lib/srt';
 import { runHybridAnalysis } from '@/lib/analysis';
 import { indicesToDeleteSegments } from '@/lib/segment-merger';
-import { analyzeFrameForPositions } from '@/lib/vision';
+import { analyzeFrameForPositions, analyzeFrameForSafeZones, changeImageBackground, clampPositionToFrame } from '@/lib/vision';
 import type { VolcengineResult, SubtitleWord, Subtitle, DeleteSegment, SubtaskStatus, Annotation, AnnotationType, AnnotationSize, AnnotationAnimation, ArrowDirection } from '@/types';
 
 type ProgressCallback = (data: { id: string; percent: number; message?: string; subtasks?: SubtaskStatus[] }) => void;
@@ -59,10 +59,14 @@ export async function executeTool(
       return executeRemoveAnnotation(projectId, input);
     case 'analyze_frame':
       return executeAnalyzeFrame(projectId, input);
+    case 'find_safe_placement':
+      return executeFindSafePlacement(projectId, input);
     case 'update_annotation':
       return executeUpdateAnnotation(projectId, input);
     case 'save_video':
       return executeSaveVideo(projectId, toolCallId, onProgress);
+    case 'change_background':
+      return executeChangeBackground(projectId, input);
     default:
       return { result: `Unknown tool: ${toolName}` };
   }
@@ -713,8 +717,84 @@ async function executeAddAnnotation(
 
   const type = input.type as AnnotationType;
   const target = input.target as string;
-  const x = input.x as number;
-  const y = input.y as number;
+  const autoSafePlacement = input.autoSafePlacement as boolean | undefined;
+  const placementTimestamp = (input.placementTimestamp as number) ?? 0;
+  
+  let x: number;
+  let y: number;
+  let positionAdjusted = false;
+  let safePlacementInfo = '';
+  
+  // If autoSafePlacement is enabled, analyze frame first to find safe position
+  if (autoSafePlacement) {
+    const dir = getProjectDir(projectId);
+    const videoFileName = project.cutVideoFile || project.videoFile;
+    const videoPath = path.join(dir, videoFileName);
+    
+    if (!fs.existsSync(videoPath)) {
+      return { result: 'Video file not found for safe placement analysis.' };
+    }
+    
+    // Extract frame for analysis
+    const frameFileName = `safe_placement_${Date.now()}.jpg`;
+    const framePath = path.join(dir, frameFileName);
+    
+    try {
+      extractFrame(videoPath, placementTimestamp, framePath, 1280);
+      
+      if (!fs.existsSync(framePath)) {
+        return { result: 'Failed to extract frame for safe placement analysis.' };
+      }
+      
+      // Analyze for safe zones
+      const safeZonesResult = await analyzeFrameForSafeZones(framePath);
+      
+      // Clean up frame file
+      try { fs.unlinkSync(framePath); } catch { /* ignore */ }
+      
+      // Use recommended position if available, otherwise use first safe zone
+      if (safeZonesResult.recommendedPosition) {
+        x = safeZonesResult.recommendedPosition.x;
+        y = safeZonesResult.recommendedPosition.y;
+      } else if (safeZonesResult.safeZones.length > 0) {
+        x = safeZonesResult.safeZones[0].x;
+        y = safeZonesResult.safeZones[0].y;
+      } else {
+        // Fallback to upper-left corner if no safe zones found
+        x = 15;
+        y = 15;
+      }
+      
+      // Build info about placement decision
+      const avoidedZones = safeZonesResult.avoidZones
+        .map(z => z.label)
+        .join(', ');
+      safePlacementInfo = avoidedZones 
+        ? ` Avoided: ${avoidedZones}.`
+        : ' No faces/obstacles detected.';
+        
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      // If analysis fails, fall back to safe corner position
+      x = 15;
+      y = 15;
+      safePlacementInfo = ` (Safe placement analysis failed: ${errorMessage}. Using fallback position.)`;
+    }
+  } else {
+    // Manual positioning - clamp to frame bounds
+    const rawX = input.x as number;
+    const rawY = input.y as number;
+    
+    if (rawX === undefined || rawY === undefined) {
+      return { result: 'Please provide x and y positions, or set autoSafePlacement=true for automatic placement.' };
+    }
+    
+    const clamped = clampPositionToFrame(rawX, rawY, 5);
+    x = clamped.x;
+    y = clamped.y;
+    positionAdjusted = rawX !== x || rawY !== y;
+  }
   const startTime = input.startTime as number | undefined;
   const endTime = input.endTime as number | undefined;
   const color = (input.color as string) || 'yellow';
@@ -763,9 +843,15 @@ async function executeAddAnnotation(
     : 'for the whole video';
 
   const typeDesc = type === 'custom_svg' ? 'custom SVG' : type;
+  const adjustmentNote = positionAdjusted 
+    ? ` (Position adjusted to stay within frame bounds.)` 
+    : '';
+  const placementNote = autoSafePlacement
+    ? ` Auto-placed using safe zone analysis.${safePlacementInfo}`
+    : adjustmentNote;
 
   return {
-    result: `Added ${typeDesc} annotation (ID: ${annotation.id}) at position (${x}%, ${y}%) ${timingDesc}. Target: "${target}".`,
+    result: `Added ${typeDesc} annotation (ID: ${annotation.id}) at position (${x.toFixed(1)}%, ${y.toFixed(1)}%) ${timingDesc}. Target: "${target}".${placementNote}`,
     emitEvent: {
       type: 'ui_panel',
       panel: 'annotations_updated',
@@ -1007,6 +1093,132 @@ async function executeAnalyzeFrame(
   }
 }
 
+// ===== Find Safe Placement Tool =====
+
+async function executeFindSafePlacement(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const timestamp = (input.timestamp as number) ?? 0;
+  const elementCount = (input.elementCount as number) ?? 1;
+
+  const dir = getProjectDir(projectId);
+  
+  // Determine which video to analyze
+  const videoFileName = project.cutVideoFile || project.videoFile;
+  const videoPath = path.join(dir, videoFileName);
+
+  if (!fs.existsSync(videoPath)) {
+    return { result: 'Video file not found.' };
+  }
+
+  // Extract frame at the specified timestamp
+  const frameFileName = `safe_zones_${timestamp.toFixed(2).replace('.', '_')}.jpg`;
+  const framePath = path.join(dir, frameFileName);
+
+  try {
+    // Extract frame
+    extractFrame(videoPath, timestamp, framePath, 1280);
+
+    if (!fs.existsSync(framePath)) {
+      return { result: 'Failed to extract frame from video.' };
+    }
+
+    // Analyze for safe placement zones
+    const result = await analyzeFrameForSafeZones(framePath);
+
+    // Clean up frame file
+    // fs.unlinkSync(framePath);
+
+    // Format avoid zones
+    const avoidList = result.avoidZones.length > 0
+      ? result.avoidZones
+          .map(z => `- AVOID: ${z.label} at (${z.x.toFixed(0)}%, ${z.y.toFixed(0)}%) size ${z.width.toFixed(0)}%x${z.height.toFixed(0)}% - ${z.reason}`)
+          .join('\n')
+      : '- No critical avoid zones detected';
+
+    // Format safe zones
+    const safeList = result.safeZones.length > 0
+      ? result.safeZones
+          .map(z => `- SAFE: ${z.label} at (${z.x.toFixed(0)}%, ${z.y.toFixed(0)}%) size ${z.width.toFixed(0)}%x${z.height.toFixed(0)}% - ${z.reason}`)
+          .join('\n')
+      : '- Use corners and edges as safe areas';
+
+    // Generate multiple recommended positions if needed
+    let recommendations = '';
+    if (result.recommendedPosition) {
+      if (elementCount === 1) {
+        recommendations = `\nRECOMMENDED POSITION: x=${result.recommendedPosition.x.toFixed(1)}%, y=${result.recommendedPosition.y.toFixed(1)}%`;
+      } else {
+        // For multiple elements, distribute across safe zones
+        const positions: Array<{x: number; y: number}> = [];
+        
+        // Start with recommended position
+        positions.push(result.recommendedPosition);
+        
+        // Add positions from safe zones, avoiding overlap
+        for (const zone of result.safeZones) {
+          if (positions.length >= elementCount) break;
+          
+          // Check this position doesn't overlap with existing ones
+          const tooClose = positions.some(p => 
+            Math.abs(p.x - zone.x) < 15 && Math.abs(p.y - zone.y) < 15
+          );
+          
+          if (!tooClose) {
+            positions.push({ x: zone.x, y: zone.y });
+          }
+        }
+        
+        // If we still need more positions, use corners that aren't near avoid zones
+        const corners = [
+          { x: 15, y: 15 }, { x: 85, y: 15 },
+          { x: 15, y: 85 }, { x: 85, y: 85 },
+          { x: 50, y: 15 }, { x: 50, y: 85 },
+        ];
+        
+        for (const corner of corners) {
+          if (positions.length >= elementCount) break;
+          
+          // Check if corner is far from avoid zones
+          const nearAvoid = result.avoidZones.some(z => 
+            Math.abs(corner.x - z.x) < z.width/2 + 10 && 
+            Math.abs(corner.y - z.y) < z.height/2 + 10
+          );
+          
+          const alreadyUsed = positions.some(p => 
+            Math.abs(p.x - corner.x) < 15 && Math.abs(p.y - corner.y) < 15
+          );
+          
+          if (!nearAvoid && !alreadyUsed) {
+            positions.push(corner);
+          }
+        }
+        
+        recommendations = `\nRECOMMENDED POSITIONS for ${elementCount} elements:\n` +
+          positions.slice(0, elementCount)
+            .map((p, i) => `  ${i + 1}. x=${p.x.toFixed(1)}%, y=${p.y.toFixed(1)}%`)
+            .join('\n');
+      }
+    }
+
+    return {
+      result: `Safe placement analysis at ${timestamp}s:\n\nAVOID ZONES (do not place elements here):\n${avoidList}\n\nSAFE ZONES (good for placement):\n${safeList}${recommendations}\n\nDescription: ${result.description || 'Analysis complete.'}\n\nUse these coordinates with add_annotation. All positions are guaranteed to be within frame bounds (5-95%).`,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    if (errorMessage.includes('OPENROUTER_API_KEY')) {
+      return { result: 'OpenRouter API key not configured. Please add OPENROUTER_API_KEY to .env.local.' };
+    }
+    
+    return { result: `Safe placement analysis failed: ${errorMessage}` };
+  }
+}
+
 // ===== Save Video Tool (Burn Annotations) =====
 
 async function executeSaveVideo(
@@ -1078,5 +1290,75 @@ async function executeSaveVideo(
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return { result: `Video export failed: ${errorMessage}` };
+  }
+}
+
+// ===== Change Background Tool =====
+
+async function executeChangeBackground(
+  projectId: string,
+  input: Record<string, unknown>,
+): Promise<ToolResult> {
+  const project = getProject(projectId);
+  if (!project) return { result: 'Project not found.' };
+
+  const timestamp = (input.timestamp as number) ?? 0;
+  const newBackground = input.newBackground as string;
+
+  if (!newBackground) {
+    return { result: 'Please provide a description of the new background.' };
+  }
+
+  const dir = getProjectDir(projectId);
+  
+  // Determine which video to use (prefer cut video if available)
+  const videoFileName = project.cutVideoFile || project.videoFile;
+  const videoPath = path.join(dir, videoFileName);
+
+  if (!fs.existsSync(videoPath)) {
+    return { result: 'Video file not found.' };
+  }
+
+  // Extract frame at the specified timestamp
+  const frameFileName = `bg_change_input_${timestamp.toFixed(2).replace('.', '_')}.jpg`;
+  const framePath = path.join(dir, frameFileName);
+  // Gemini returns PNG images
+  const outputFileName = `bg_changed_${Date.now()}.png`;
+  const outputPath = path.join(dir, outputFileName);
+
+  try {
+    // Extract frame
+    extractFrame(videoPath, timestamp, framePath, 1280);
+
+    if (!fs.existsSync(framePath)) {
+      return { result: 'Failed to extract frame from video.' };
+    }
+
+    // Call Gemini to change the background
+    const result = await changeImageBackground(framePath, newBackground, outputPath);
+
+    if (!result.success) {
+      return { result: `Background change failed: ${result.error}` };
+    }
+
+    // Return success with preview info
+    const previewUrl = `/api/projects/${projectId}/download?file=${encodeURIComponent(outputFileName)}`;
+
+    return {
+      result: `Background changed successfully! Preview saved.\n\nOriginal frame extracted at ${timestamp}s.\nNew background: "${newBackground}"\n\n**[View Preview](${previewUrl})**\n\nNote: This is a single-frame preview. Full video background replacement would require processing each frame.`,
+      emitEvent: {
+        type: 'ui_panel',
+        panel: 'background_preview',
+        data: { 
+          originalFrame: frameFileName,
+          editedFrame: outputFileName,
+          timestamp,
+          newBackground,
+        },
+      },
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return { result: `Background change failed: ${errorMessage}` };
   }
 }

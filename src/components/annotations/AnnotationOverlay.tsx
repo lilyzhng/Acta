@@ -8,6 +8,9 @@ interface AnnotationOverlayProps {
   currentTime: number;
   containerWidth: number;
   containerHeight: number;
+  // Actual video dimensions (for calculating letterbox offset)
+  videoWidth?: number;
+  videoHeight?: number;
 }
 
 // Size mappings for different annotation sizes
@@ -72,7 +75,42 @@ export function AnnotationOverlay({
   currentTime,
   containerWidth,
   containerHeight,
+  videoWidth,
+  videoHeight,
 }: AnnotationOverlayProps) {
+  // Calculate the actual video content bounds within the container
+  // This handles letterboxing when video uses object-contain
+  const videoBounds = useMemo(() => {
+    if (!videoWidth || !videoHeight || !containerWidth || !containerHeight) {
+      // Fallback: assume video fills container
+      return { offsetX: 0, offsetY: 0, width: containerWidth, height: containerHeight };
+    }
+    
+    const videoAspect = videoWidth / videoHeight;
+    const containerAspect = containerWidth / containerHeight;
+    
+    let renderedWidth: number;
+    let renderedHeight: number;
+    let offsetX: number;
+    let offsetY: number;
+    
+    if (videoAspect > containerAspect) {
+      // Video is wider than container - letterbox on top/bottom
+      renderedWidth = containerWidth;
+      renderedHeight = containerWidth / videoAspect;
+      offsetX = 0;
+      offsetY = (containerHeight - renderedHeight) / 2;
+    } else {
+      // Video is taller than container - letterbox on left/right
+      renderedHeight = containerHeight;
+      renderedWidth = containerHeight * videoAspect;
+      offsetX = (containerWidth - renderedWidth) / 2;
+      offsetY = 0;
+    }
+    
+    return { offsetX, offsetY, width: renderedWidth, height: renderedHeight };
+  }, [videoWidth, videoHeight, containerWidth, containerHeight]);
+
   // Filter annotations visible at current time
   const visibleAnnotations = useMemo(() => {
     return annotations.filter(a => {
@@ -115,8 +153,9 @@ export function AnnotationOverlay({
 
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         {visibleAnnotations.map(annotation => {
-          const x = (annotation.position.x / 100) * containerWidth;
-          const y = (annotation.position.y / 100) * containerHeight;
+          // Position relative to video content area (not container with letterboxing)
+          const x = videoBounds.offsetX + (annotation.position.x / 100) * videoBounds.width;
+          const y = videoBounds.offsetY + (annotation.position.y / 100) * videoBounds.height;
           const sizeConfig = SIZE_CONFIG[annotation.style.size || 'medium'];
           const color = annotation.style.color || 'yellow';
           const animClass = getAnimationClass(annotation.style.animation);

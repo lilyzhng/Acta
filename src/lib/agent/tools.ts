@@ -131,7 +131,7 @@ export const agentTools: Tool[] = [
   {
     name: 'add_annotation',
     description:
-      'Add a visual annotation overlay to the video. Supports predefined shapes (arrow, circle, box, text, spotlight) OR custom SVG for any arbitrary graphics. For custom_svg type, generate raw SVG elements that will be rendered directly. Use position inference based on the user\'s description.',
+      'Add a visual annotation overlay to the video. Supports predefined shapes (arrow, circle, box, text, spotlight) OR custom SVG for any arbitrary graphics. For custom_svg type, generate raw SVG elements that will be rendered directly. Use position inference based on the user\'s description. For DECORATIVE elements (balloons, confetti, hearts, etc.), set autoSafePlacement=true to automatically analyze the frame and place elements in safe zones that avoid faces.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -148,12 +148,22 @@ export const agentTools: Tool[] = [
         x: {
           type: 'number',
           description:
-            'X position as percentage (0-100). For custom_svg, this is the center position of the SVG container.',
+            'X position as percentage (0-100). For custom_svg, this is the center position of the SVG container. Can be omitted if autoSafePlacement=true.',
         },
         y: {
           type: 'number',
           description:
-            'Y position as percentage (0-100). For custom_svg, this is the center position of the SVG container.',
+            'Y position as percentage (0-100). For custom_svg, this is the center position of the SVG container. Can be omitted if autoSafePlacement=true.',
+        },
+        autoSafePlacement: {
+          type: 'boolean',
+          description:
+            'If true, automatically analyze the video frame to find safe placement zones (avoiding faces) before placing the annotation. The x/y will be auto-determined. Use this for decorative elements like balloons, confetti, hearts, etc. Default: false.',
+        },
+        placementTimestamp: {
+          type: 'number',
+          description:
+            'Timestamp (seconds) to analyze for safe placement. Only used when autoSafePlacement=true. Default: 0.',
         },
         startTime: {
           type: 'number',
@@ -205,7 +215,7 @@ export const agentTools: Tool[] = [
           description: 'Height of SVG container in pixels (default: 200).',
         },
       },
-      required: ['type', 'target', 'x', 'y'],
+      required: ['type', 'target'],
     },
   },
   {
@@ -251,6 +261,25 @@ export const agentTools: Tool[] = [
         },
       },
       required: ['timestamp', 'query'],
+    },
+  },
+  {
+    name: 'find_safe_placement',
+    description:
+      'Analyze a video frame to find SAFE zones for placing decorative elements (balloons, graphics, SVGs) and AVOID zones (faces, heads, important subjects). Use this BEFORE adding random/decorative elements to ensure they don\'t cover people\'s faces. Returns recommended positions that avoid faces and stay within frame bounds.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        timestamp: {
+          type: 'number',
+          description: 'Time in seconds to extract the frame (default: 0).',
+        },
+        elementCount: {
+          type: 'number',
+          description: 'How many elements you plan to place (helps distribute recommendations). Default: 1.',
+        },
+      },
+      required: [],
     },
   },
   {
@@ -318,6 +347,25 @@ export const agentTools: Tool[] = [
       type: 'object' as const,
       properties: {},
       required: [],
+    },
+  },
+  {
+    name: 'change_background',
+    description:
+      'Change the background of the video using AI image generation. Extracts a frame, uses Gemini 2.5 Flash Image to replace the background while preserving the foreground subject, then shows a preview. Use when the user asks to change, replace, or edit the video background (e.g., "change background to a party scene", "replace background with a beach").',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        timestamp: {
+          type: 'number',
+          description: 'Time in seconds to extract the frame for preview (default: 0).',
+        },
+        newBackground: {
+          type: 'string',
+          description: 'Description of the new background (e.g., "a colorful party scene with balloons", "a modern tech office", "a tropical beach at sunset").',
+        },
+      },
+      required: ['newBackground'],
     },
   },
 ];

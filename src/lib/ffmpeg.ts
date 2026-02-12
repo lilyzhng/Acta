@@ -346,9 +346,9 @@ export function annotationToPng(
 ): { path: string; x: number; y: number; width: number; height: number } {
   const pngPath = path.join(outputDir, `annotation_${annotation.id}.png`);
   
-  // Calculate actual pixel position
-  const x = Math.round((annotation.position.x / 100) * videoWidth);
-  const y = Math.round((annotation.position.y / 100) * videoHeight);
+  // Calculate center position in pixels (annotation.position is percentage)
+  const centerX = Math.round((annotation.position.x / 100) * videoWidth);
+  const centerY = Math.round((annotation.position.y / 100) * videoHeight);
   
   // Determine size - scale based on video dimensions
   // Base sizes are percentages of the smaller video dimension
@@ -357,13 +357,37 @@ export function annotationToPng(
   const sizePercent = sizePercents[annotation.style.size] || 0.20;
   const baseSize = Math.round(minDimension * sizePercent);
   
-  // Use explicit svgWidth/Height if provided, otherwise use scaled size
-  let width = annotation.svgWidth ? Math.round(annotation.svgWidth * (minDimension / 1000)) : baseSize;
-  let height = annotation.svgHeight ? Math.round(annotation.svgHeight * (minDimension / 1000)) : baseSize;
+  // For explicit svgWidth/Height: these are stored as pixel values relative to a ~600px preview container
+  // We need to scale them proportionally to the actual video size
+  // Preview container is typically 400-700px, so we use 500px as reference
+  const PREVIEW_REFERENCE_SIZE = 500;
+  const scaleFactor = minDimension / PREVIEW_REFERENCE_SIZE;
   
-  // Ensure minimum size for visibility
-  width = Math.max(width, 50);
-  height = Math.max(height, 50);
+  let width: number;
+  let height: number;
+  
+  if (annotation.svgWidth && annotation.svgHeight) {
+    // Scale the explicit dimensions from preview size to video size
+    width = Math.round(annotation.svgWidth * scaleFactor);
+    height = Math.round(annotation.svgHeight * scaleFactor);
+  } else if (annotation.svgWidth) {
+    width = Math.round(annotation.svgWidth * scaleFactor);
+    height = width; // Maintain square if only width provided
+  } else if (annotation.svgHeight) {
+    height = Math.round(annotation.svgHeight * scaleFactor);
+    width = height;
+  } else {
+    // Use size preset
+    width = baseSize;
+    height = baseSize;
+  }
+  
+  // Ensure minimum size for visibility (scaled to video)
+  const minSize = Math.round(minDimension * 0.05); // At least 5% of video
+  width = Math.max(width, minSize);
+  height = Math.max(height, minSize);
+  
+  console.log(`[annotationToPng] ${annotation.id}: svgWidth=${annotation.svgWidth}, svgHeight=${annotation.svgHeight}, scaleFactor=${scaleFactor.toFixed(2)}, finalSize=${width}x${height}`);
   
   // Build complete SVG
   let svgContent: string;
@@ -374,7 +398,21 @@ export function annotationToPng(
     let cleanedContent = annotation.svgContent
       .replace(/<!\[CDATA\[/g, '')
       .replace(/\]\]>/g, '');
-    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${annotation.svgViewBox || '0 0 100 100'}">${cleanedContent}</svg>`;
+    
+    // Add drop shadow filter to match preview appearance
+    const dropShadowFilter = `
+      <defs>
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.5"/>
+        </filter>
+      </defs>
+    `;
+    
+    // Wrap content in a group with the filter applied
+    svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="${annotation.svgViewBox || '0 0 100 100'}">
+      ${dropShadowFilter}
+      <g filter="url(#dropShadow)">${cleanedContent}</g>
+    </svg>`;
   } else if (annotation.type === 'arrow') {
     // Generate arrow SVG based on direction
     const arrowPaths: Record<string, string> = {
@@ -389,15 +427,36 @@ export function annotationToPng(
     };
     const d = arrowPaths[annotation.arrowDirection || 'right'] || arrowPaths['right'];
     svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
-      <path d="${d}" stroke="${color}" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <defs>
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.5"/>
+        </filter>
+      </defs>
+      <g filter="url(#dropShadow)">
+        <path d="${d}" stroke="${color}" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
     </svg>`;
   } else if (annotation.type === 'circle') {
     svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="40" stroke="${color}" stroke-width="4" fill="none"/>
+      <defs>
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.5"/>
+        </filter>
+      </defs>
+      <g filter="url(#dropShadow)">
+        <circle cx="50" cy="50" r="40" stroke="${color}" stroke-width="4" fill="none"/>
+      </g>
     </svg>`;
   } else if (annotation.type === 'box') {
     svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
-      <rect x="10" y="10" width="80" height="80" stroke="${color}" stroke-width="4" fill="none"/>
+      <defs>
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.5"/>
+        </filter>
+      </defs>
+      <g filter="url(#dropShadow)">
+        <rect x="10" y="10" width="80" height="80" stroke="${color}" stroke-width="4" fill="none"/>
+      </g>
     </svg>`;
   } else if (annotation.type === 'text' && annotation.text) {
     // For text, we'll use a different approach with FFmpeg drawtext
@@ -418,7 +477,14 @@ export function annotationToPng(
   } else {
     // Fallback
     svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 100 100">
-      <circle cx="50" cy="50" r="40" stroke="${color}" stroke-width="4" fill="none"/>
+      <defs>
+        <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="2" dy="4" stdDeviation="4" flood-opacity="0.5"/>
+        </filter>
+      </defs>
+      <g filter="url(#dropShadow)">
+        <circle cx="50" cy="50" r="40" stroke="${color}" stroke-width="4" fill="none"/>
+      </g>
     </svg>`;
   }
   
@@ -482,9 +548,11 @@ export function annotationToPng(
   // Clean up SVG
   try { fs.unlinkSync(svgPath); } catch { /* ignore */ }
   
-  // Center the annotation on the position
-  const overlayX = Math.max(0, x - Math.round(width / 2));
-  const overlayY = Math.max(0, y - Math.round(height / 2));
+  // Center the annotation on the position (convert center to top-left for FFmpeg overlay)
+  const overlayX = Math.max(0, centerX - Math.round(width / 2));
+  const overlayY = Math.max(0, centerY - Math.round(height / 2));
+  
+  console.log(`[annotationToPng] ${annotation.id}: position=(${annotation.position.x}%, ${annotation.position.y}%) -> center=(${centerX}, ${centerY}) -> overlay=(${overlayX}, ${overlayY})`);
   
   return { path: pngPath, x: overlayX, y: overlayY, width, height };
 }
