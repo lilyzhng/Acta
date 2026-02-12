@@ -44,6 +44,7 @@ export async function GET(
         'Content-Range': `bytes ${start}-${end}/${stat.size}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': String(end - start + 1),
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
       },
     });
   }
@@ -63,6 +64,7 @@ export async function GET(
       'Content-Type': 'audio/mpeg',
       'Content-Length': String(stat.size),
       'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
     },
   });
 }

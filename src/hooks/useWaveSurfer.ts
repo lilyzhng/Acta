@@ -41,11 +41,13 @@ export function useWaveSurfer(options: UseWaveSurferOptions) {
         waveColor: '#4a9eff',
         progressColor: '#1976D2',
         cursorColor: '#fff',
-        height: 80,
+        height: 60,
         barWidth: 2,
         barGap: 1,
         barRadius: 2,
+        barAlign: 'bottom',
         url: optionsRef.current.url,
+        normalize: true,
       }) as unknown as WaveSurferInstance;
 
       wsRef.current = ws;

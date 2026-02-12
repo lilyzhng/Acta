@@ -73,12 +73,17 @@ export const WaveformPlayer = memo(function WaveformPlayer({
     if (!containerRef.current) return;
 
     let ws: WaveSurferInstance | null = null;
+    let cancelled = false;
 
     const init = async () => {
       const [WaveSurferModule, RegionsModule] = await Promise.all([
         import('wavesurfer.js'),
         import('wavesurfer.js/dist/plugins/regions.esm.js'),
       ]);
+      
+      // Check if effect was cleaned up while we were loading
+      if (cancelled) return;
+      
       const WaveSurfer = WaveSurferModule.default;
       const RegionsPlugin = RegionsModule.default;
       const regionsPlugin = RegionsPlugin.create();
@@ -88,13 +93,13 @@ export const WaveformPlayer = memo(function WaveformPlayer({
         waveColor: '#4a9eff',
         progressColor: '#1976D2',
         cursorColor: '#fff',
-        height: 80,
+        height: 60,
         barWidth: 2,
         barGap: 1,
         barRadius: 2,
+        barAlign: 'bottom',
         url: audioUrl,
-        // Overlay both stereo channels into one visual waveform
-        splitChannels: [{ overlay: false }, { overlay: true }],
+        normalize: true,
         plugins: [regionsPlugin],
       }) as unknown as WaveSurferInstance;
 
@@ -120,6 +125,7 @@ export const WaveformPlayer = memo(function WaveformPlayer({
     init();
 
     return () => {
+      cancelled = true;
       ws?.destroy();
       regionsPluginRef.current = null;
       internalRef.current = null;

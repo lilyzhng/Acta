@@ -70,7 +70,8 @@ export function getVideoInfo(filePath: string): { duration: number; width: numbe
 }
 
 export function extractAudio(videoPath: string, audioPath: string): void {
-  execSync(`ffmpeg -y -i "file:${videoPath}" -vn -acodec libmp3lame -q:a 2 "file:${audioPath}"`, { stdio: 'pipe' });
+  // -ac 1 converts to mono so waveform displays as single wave
+  execSync(`ffmpeg -y -i "file:${videoPath}" -vn -ac 1 -acodec libmp3lame -q:a 2 "file:${audioPath}"`, { stdio: 'pipe' });
 }
 
 interface KeepSegment {
