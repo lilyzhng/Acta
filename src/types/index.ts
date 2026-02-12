@@ -29,6 +29,7 @@ export interface Project {
   autoSelected?: string; // filename
   deleteSegments?: string; // filename
   cutVideoFile?: string;
+  cutAudioFile?: string; // audio extracted from cut video
   subtitlesWithTime?: string; // filename
   srtFile?: string;
   burnedVideoFile?: string;

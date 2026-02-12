@@ -18,17 +18,21 @@ interface WaveSurferInstance {
   on: (event: string, callback: (...args: unknown[]) => void) => void;
 }
 
-interface ProjectMediaPanelProps {
+interface UnifiedProjectPanelProps {
   projectId: string;
+  refreshTrigger?: string;
 }
 
-export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
+export function UnifiedProjectPanel({ projectId, refreshTrigger }: UnifiedProjectPanelProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const wsRef = useRef<WaveSurferInstance | null>(null);
   const [hasAudio, setHasAudio] = useState<boolean | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [cutVideoFile, setCutVideoFile] = useState<string | null>(null);
-  const [videoKey, setVideoKey] = useState(0); // Key to force video element remount
+  const [cutAudioFile, setCutAudioFile] = useState<string | null>(null);
+  const [burnedVideoFile, setBurnedVideoFile] = useState<string | null>(null);
+  const [videoKey, setVideoKey] = useState(0);
+  const [waveformKey, setWaveformKey] = useState(0);
   const [words, setWords] = useState<SubtitleWord[] | null>(null);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [autoSelected, setAutoSelected] = useState<number[]>([]);
@@ -39,12 +43,17 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
   const [isBurning, setIsBurning] = useState(false);
   const [burnProgress, setBurnProgress] = useState(0);
   const subtitleListRef = useRef<HTMLDivElement>(null);
+  const subtitlesLoadedRef = useRef(false); // Track if subtitles were loaded from server
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const extractTriggeredRef = useRef(false);
   const initialSelectionSetRef = useRef(false);
+  const subtitleGenTriggeredRef = useRef(false);
   const isSelectingRef = useRef(false);
   const selectStartRef = useRef(-1);
   const selectModeRef = useRef<'add' | 'remove'>('add');
   const prevCutVideoFileRef = useRef<string | null>(null);
+  const prevStatusRef = useRef<string | null>(null);
+  const justCompletedCutRef = useRef(false);
 
   const fetchProject = useCallback(() => {
     fetch(`/api/projects/${projectId}`)
@@ -54,15 +63,28 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
           setHasAudio(!!project.audioFile);
           setStatus(project.status);
           
-          // Update cut video file and force video reload if changed
           const newCutVideoFile = project.cutVideoFile || null;
+          const newCutAudioFile = project.cutAudioFile || null;
           setCutVideoFile(prev => {
-            // If cutVideoFile changed, increment videoKey to force remount
             if (newCutVideoFile && newCutVideoFile !== prev) {
-              console.log('[ProjectMediaPanel] cutVideoFile changed from', prev, 'to', newCutVideoFile, '- forcing video reload');
               setVideoKey(k => k + 1);
             }
             return newCutVideoFile;
+          });
+          setCutAudioFile(prev => {
+            if (newCutAudioFile && newCutAudioFile !== prev) {
+              setWaveformKey(k => k + 1);
+            }
+            return newCutAudioFile;
+          });
+          
+          // Track burned video file
+          const newBurnedVideoFile = project.burnedVideoFile || null;
+          setBurnedVideoFile(prev => {
+            if (newBurnedVideoFile && newBurnedVideoFile !== prev) {
+              setVideoKey(k => k + 1);
+            }
+            return newBurnedVideoFile;
           });
           
           // Fetch subtitles if available
@@ -71,9 +93,9 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
               const subRes = await fetch(`/api/subtitles?projectId=${projectId}`);
               if (subRes.ok) {
                 const subData = await subRes.json();
-                // API returns array directly
                 if (Array.isArray(subData)) {
                   setSubtitles(subData);
+                  subtitlesLoadedRef.current = true; // Mark as loaded from server
                 }
               }
             } catch {
@@ -89,11 +111,9 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
                   setWords(data.words);
                   const auto = data.autoSelected ?? [];
                   setAutoSelected(auto);
-                  // Track what was actually removed (for showing final transcript)
                   if (data.selectedIndices) {
                     setRemovedIndices(data.selectedIndices);
                   }
-                  // Only set initial selection once, don't overwrite user changes
                   if (!initialSelectionSetRef.current) {
                     setSelected(new Set(auto));
                     initialSelectionSetRef.current = true;
@@ -111,23 +131,27 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     fetchProject();
   }, [fetchProject]);
 
-  // Force video reload when cut completes (status transitions to 'cut' or cutVideoFile changes)
-  const prevStatusRef = useRef<string | null>(null);
+  // Refresh when triggered by panel events from chat
+  useEffect(() => {
+    if (refreshTrigger) {
+      fetchProject();
+    }
+  }, [refreshTrigger, fetchProject]);
+
+  // Force video reload when cut completes
   useEffect(() => {
     const cutJustCompleted = prevStatusRef.current === 'cutting' && status === 'cut';
     const cutFileChanged = cutVideoFile && cutVideoFile !== prevCutVideoFileRef.current;
     
     if (cutJustCompleted || cutFileChanged) {
-      console.log('[ProjectMediaPanel] Reloading video - cutJustCompleted:', cutJustCompleted, 'cutFileChanged:', cutFileChanged);
       prevCutVideoFileRef.current = cutVideoFile;
-      // Increment key to force video element remount
       setVideoKey(k => k + 1);
     }
     
     prevStatusRef.current = status;
   }, [cutVideoFile, status]);
 
-  // Trigger extraction when we have video but no audio (e.g. legacy projects)
+  // Trigger extraction when we have video but no audio
   useEffect(() => {
     if (hasAudio === false && status === 'uploaded' && !extractTriggeredRef.current) {
       extractTriggeredRef.current = true;
@@ -137,27 +161,33 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     }
   }, [hasAudio, status, projectId, fetchProject]);
 
-  // Track if we just transitioned from 'cutting' to 'cut' to do one final fetch
-  const justCompletedCutRef = useRef(false);
-  
-  // Poll when extracting audio, transcribing, or cutting
+  // Auto-generate subtitles when cut completes
+  useEffect(() => {
+    if (status === 'cut' && cutVideoFile && !subtitles && !subtitleGenTriggeredRef.current) {
+      subtitleGenTriggeredRef.current = true;
+      fetch('/api/subtitles/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId }),
+      })
+        .then((r) => r.ok && fetchProject())
+        .catch(() => {});
+    }
+  }, [status, cutVideoFile, subtitles, projectId, fetchProject]);
+
+  // Poll when processing
   useEffect(() => {
     const shouldPoll =
       status === 'extracting_audio' || 
       status === 'transcribing' ||
       status === 'analyzing' ||
       status === 'cutting' ||
+      status === 'burning' ||
       (hasAudio && !words);
-    console.log('[ProjectMediaPanel] Poll check - status:', status, 'shouldPoll:', shouldPoll, 'cutVideoFile:', cutVideoFile);
     
-    // Detect transition from cutting to cut - do one final fetch to ensure we have latest data
     if (prevStatusRef.current === 'cutting' && status === 'cut' && !justCompletedCutRef.current) {
       justCompletedCutRef.current = true;
-      // Delay fetch slightly to ensure server has finished writing
-      setTimeout(() => {
-        console.log('[ProjectMediaPanel] Post-cut fetch to refresh video');
-        fetchProject();
-      }, 500);
+      setTimeout(() => fetchProject(), 500);
     } else if (status !== 'cut') {
       justCompletedCutRef.current = false;
     }
@@ -168,7 +198,7 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     }
   }, [hasAudio, words, status, fetchProject, cutVideoFile]);
 
-  // Sync video to waveform (waveform is primary for playback when audio exists)
+  // Sync video to waveform (waveform controls playback, video is always muted)
   const handleTimeUpdate = useCallback(
     (t: number) => {
       if (videoRef.current && Math.abs(videoRef.current.currentTime - t) > 0.1) {
@@ -191,6 +221,7 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
       videoRef.current.pause();
     }
   }, []);
+
 
   const handleJump = useCallback((time: number) => {
     if (!isSelectingRef.current) {
@@ -237,7 +268,7 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     isSelectingRef.current = false;
   }, []);
 
-  // Subtitle editing handlers
+  // Subtitle handlers
   const handleSubtitleChange = useCallback((index: number, newText: string) => {
     setSubtitles(prev => {
       if (!prev) return prev;
@@ -256,12 +287,38 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     });
   }, [projectId, subtitles]);
 
+  // Auto-save subtitles when edited (debounced)
+  useEffect(() => {
+    // Skip if subtitles haven't been loaded from server yet (initial load)
+    if (!subtitlesLoadedRef.current || !subtitles) return;
+    
+    // Clear previous timeout
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    
+    // Debounce save by 500ms
+    saveTimeoutRef.current = setTimeout(() => {
+      fetch('/api/subtitles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, subtitles }),
+      }).catch(() => {
+        // Ignore save errors silently
+      });
+    }, 500);
+    
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+    };
+  }, [subtitles, projectId]);
+
   const handleBurnSubtitles = useCallback(async () => {
     if (!subtitles || isBurning) return;
     
-    // Save first
     await handleSubtitleSave();
-    
     setIsBurning(true);
     setBurnProgress(0);
 
@@ -297,7 +354,7 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
               }
               if (data.done) {
                 setIsBurning(false);
-                fetchProject(); // Refresh to get burned video
+                fetchProject();
               }
             } catch {
               // Ignore parse errors
@@ -318,13 +375,11 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     const idx = subtitles.findIndex(s => t >= s.start && t < s.end);
     if (idx >= 0 && idx !== activeSubtitleIndex) {
       setActiveSubtitleIndex(idx);
-      // Scroll to active subtitle
       const el = subtitleListRef.current?.querySelector(`[data-sub-idx="${idx}"]`);
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
   }, [subtitles, activeSubtitleIndex]);
 
-  // Attach video time update listener when showing subtitles
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !subtitles) return;
@@ -343,167 +398,157 @@ export function ProjectMediaPanel({ projectId }: ProjectMediaPanelProps) {
     [words, selected],
   );
 
-  // Filter words to show only kept words (not removed) when showing cut result
-  const keptWords = useMemo(() => {
-    if (!words || !cutVideoFile) return null;
-    // Use removedIndices if available, otherwise fall back to selected
-    const removedSet = removedIndices.length > 0 ? new Set(removedIndices) : selected;
-    return words
-      .filter((w, i) => !removedSet.has(i) && !w.isGap)
-      .map(w => w.text)
-      .join(' ');
-  }, [words, removedIndices, selected, cutVideoFile]);
-
-  // Use cut video if available, otherwise original (use videoKey for cache busting)
   const videoUrl = useMemo(() => {
+    // Prioritize: burned video > cut video > original video
+    if (burnedVideoFile) {
+      return `/api/video/${projectId}?file=${encodeURIComponent(burnedVideoFile)}&v=${videoKey}`;
+    }
     if (cutVideoFile) {
       return `/api/video/${projectId}?file=${encodeURIComponent(cutVideoFile)}&v=${videoKey}`;
     }
     return `/api/video/${projectId}`;
-  }, [projectId, cutVideoFile, videoKey]);
+  }, [projectId, burnedVideoFile, cutVideoFile, videoKey]);
+
+  // Determine what to show in the content column
+  const showSubtitles = subtitles && subtitles.length > 0;
+  const showWordSelector = !showSubtitles && words && words.length > 0 && !cutVideoFile;
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Video - top */}
-      <div className="flex-shrink-0 p-4 pb-2">
-        {cutVideoFile && (
-          <div className="mb-2 text-center text-sm text-green-400">
-            Cut complete - filler words removed
-          </div>
-        )}
-        <video
-          key={`video-${videoKey}`}
-          ref={videoRef}
-          className="w-full max-h-[40vh] bg-black rounded-lg object-contain"
-          src={videoUrl}
-          playsInline
-          muted={!cutVideoFile}
-          controls={!!cutVideoFile}
-        />
-      </div>
-
-      {/* Show subtitles editor when subtitles are available */}
-      {cutVideoFile && subtitles && subtitles.length > 0 && (
-        <div className="flex-1 overflow-auto p-4 pt-2 flex flex-col">
-          {/* Controls */}
-          <div className="flex gap-2 mb-3 flex-wrap items-center">
-            <button
-              onClick={() => {
-                const v = videoRef.current;
-                if (v) v.paused ? v.play() : v.pause();
-              }}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm transition-colors"
-            >
-              Play/Pause
-            </button>
-            <select
-              onChange={(e) => {
-                if (videoRef.current) videoRef.current.playbackRate = parseFloat(e.target.value);
-              }}
-              className="px-3 py-2 bg-neutral-700 text-white border-none rounded text-sm"
-              defaultValue="1"
-            >
-              <option value="0.5">0.5x</option>
-              <option value="1">1x</option>
-              <option value="1.5">1.5x</option>
-              <option value="2">2x</option>
-              <option value="3">3x</option>
-            </select>
-            <button
-              onClick={handleSubtitleSave}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm transition-colors"
-            >
-              Save
-            </button>
-            <button
-              onClick={handleBurnSubtitles}
-              disabled={isBurning}
-              className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-neutral-600 text-white rounded text-sm transition-colors"
-            >
-              {isBurning ? `Burning... ${burnProgress}%` : 'Burn Subtitles'}
-            </button>
-          </div>
-
-          {/* Subtitles list */}
-          <div className="flex-1 overflow-auto" ref={subtitleListRef}>
-            <div className="text-xs text-neutral-500 mb-2">
-              Subtitles ({subtitles.length}) - Click to edit, click timestamp to seek
+    <div className="flex h-full">
+      {/* Column 1: Video + Waveform */}
+      <div className="w-1/2 flex flex-col border-r border-neutral-800 overflow-hidden">
+        {/* Video */}
+        <div className="flex-shrink-0 p-4 pb-2">
+          {burnedVideoFile && (
+            <div className="mb-2 text-center text-sm text-green-400">
+              Subtitles attached - final video ready
             </div>
-            <div className="space-y-1">
-              {subtitles.map((sub, i) => (
-                <SubtitleItem
-                  key={i}
-                  subtitle={sub}
-                  index={i}
-                  isActive={i === activeSubtitleIndex}
-                  onEdit={handleSubtitleChange}
-                  onJump={handleSubtitleJump}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Show cut result transcript when cut video exists but no subtitles yet */}
-      {cutVideoFile && keptWords && (!subtitles || subtitles.length === 0) && (
-        <div className="flex-1 overflow-auto p-4 pt-2">
-          <div className="p-4 bg-neutral-800 rounded-lg">
-            <h3 className="text-white font-medium mb-2">Final Transcript</h3>
-            <p className="text-neutral-300 leading-relaxed">{keptWords}</p>
-          </div>
-        </div>
-      )}
-
-      {/* Audio waveform + words - bottom (only show when not showing cut video) */}
-      {!cutVideoFile && (
-        <div className="flex-1 overflow-auto p-4 pt-2">
-          {hasAudio === true && (
-            <>
-              <WaveformPlayer
-                audioUrl={`/api/audio/${projectId}`}
-                onTimeUpdate={handleTimeUpdate}
-                onPlay={handlePlay}
-                onPause={handlePause}
-                wsRef={wsRef}
-                removeSegments={removeSegments}
-              />
-              {words && words.length > 0 && (
-                <div className="mt-3 p-3 bg-neutral-800 rounded text-xs text-neutral-400 leading-relaxed">
-                  <b className="text-white">Tip:</b> Click a red word to deselect it. Double-click any word to toggle. Shift+drag to batch select/deselect.
-                </div>
-              )}
-              {words && words.length > 0 && (
-                <div className="mt-3">
-                  <WordSelector
-                    words={words}
-                    selected={selected}
-                    autoSelected={new Set(autoSelected)}
-                    currentIndex={currentIndex}
-                    onToggle={handleToggle}
-                    onStartDrag={handleStartDrag}
-                    onMoveDrag={handleMoveDrag}
-                    onEndDrag={handleEndDrag}
-                    onJump={handleJump}
-                  />
-                </div>
-              )}
-            </>
           )}
-          {hasAudio === false && (
+          {cutVideoFile && !burnedVideoFile && (
+            <div className="mb-2 text-center text-sm text-green-400">
+              Cut complete - filler words removed
+            </div>
+          )}
+          <video
+            key={`video-${videoKey}`}
+            ref={videoRef}
+            className="w-full max-h-[70vh] bg-black rounded-lg object-contain"
+            src={videoUrl}
+            playsInline
+            muted
+          />
+        </div>
+
+        {/* Waveform */}
+        <div className="flex-1 overflow-auto p-4 pt-2">
+          {/* Before cut - show original audio waveform */}
+          {!cutVideoFile && hasAudio === true && (
+            <WaveformPlayer
+              audioUrl={`/api/audio/${projectId}`}
+              onTimeUpdate={handleTimeUpdate}
+              onPlay={handlePlay}
+              onPause={handlePause}
+              wsRef={wsRef}
+              removeSegments={removeSegments}
+            />
+          )}
+          
+          {/* After cut - show cut audio waveform if available */}
+          {cutVideoFile && cutAudioFile && (
+            <WaveformPlayer
+              key={`cut-waveform-${waveformKey}`}
+              audioUrl={`/api/audio/${projectId}?cut=true&v=${waveformKey}`}
+              onTimeUpdate={handleTimeUpdate}
+              onPlay={handlePlay}
+              onPause={handlePause}
+              wsRef={wsRef}
+              removeSegments={[]}
+            />
+          )}
+          
+          {/* After cut but no cut audio - show simple message */}
+          {cutVideoFile && !cutAudioFile && (
+            <div className="p-4 bg-neutral-800 rounded-lg text-center text-neutral-400 text-sm">
+              <div className="text-green-400 font-medium mb-1">Video ready</div>
+              Use the video controls above to play with audio
+            </div>
+          )}
+          
+          {!cutVideoFile && hasAudio === false && (
             <div className="p-4 bg-neutral-800 rounded-lg text-center text-neutral-500 text-sm">
               {status === 'extracting_audio'
                 ? 'Extracting audio from video…'
                 : 'Processing video. The waveform will appear shortly.'}
             </div>
           )}
-          {hasAudio === null && (
+          {!cutVideoFile && hasAudio === null && (
             <div className="p-4 bg-neutral-800 rounded-lg text-center text-neutral-500 text-sm">
               Loading...
             </div>
           )}
         </div>
-      )}
+      </div>
+
+      {/* Column 2: Transcription / Subtitles */}
+      <div className="w-1/2 flex flex-col overflow-hidden">
+        {/* Subtitles Editor */}
+        {showSubtitles && (
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Subtitles list */}
+            <div className="flex-1 overflow-auto p-4" ref={subtitleListRef}>
+              <div className="text-xs text-neutral-500 mb-2">
+                Subtitles ({subtitles.length}) - Double-click to edit, click timestamp to seek
+              </div>
+              <div className="space-y-1">
+                {subtitles.map((sub, i) => (
+                  <SubtitleItem
+                    key={i}
+                    subtitle={sub}
+                    index={i}
+                    isActive={i === activeSubtitleIndex}
+                    onEdit={handleSubtitleChange}
+                    onJump={handleSubtitleJump}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Word Selector (during cutting stage) */}
+        {showWordSelector && (
+          <div className="flex-1 overflow-auto p-4">
+            <div className="mb-3 p-3 bg-neutral-800 rounded text-xs text-neutral-400 leading-relaxed">
+              <b className="text-white">Tip:</b> Click a red word to deselect it. Double-click any word to toggle. Shift+drag to batch select/deselect.
+            </div>
+            <WordSelector
+              words={words}
+              selected={selected}
+              autoSelected={new Set(autoSelected)}
+              currentIndex={currentIndex}
+              onToggle={handleToggle}
+              onStartDrag={handleStartDrag}
+              onMoveDrag={handleMoveDrag}
+              onEndDrag={handleEndDrag}
+              onJump={handleJump}
+            />
+          </div>
+        )}
+
+        {/* Empty state */}
+        {!showSubtitles && !showWordSelector && (
+          <div className="flex-1 flex items-center justify-center p-4">
+            <div className="text-center text-neutral-500">
+              {status === 'transcribing' && 'Transcribing video...'}
+              {status === 'analyzing' && 'Analyzing transcript...'}
+              {status === 'cutting' && 'Cutting video...'}
+              {status === 'cut' && !subtitles && 'Generating subtitles...'}
+              {!['transcribing', 'analyzing', 'cutting', 'cut'].includes(status || '') && 
+                'Transcription will appear here'}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

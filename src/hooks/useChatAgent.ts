@@ -18,6 +18,7 @@ export function useChatAgent(projectId: string) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [panelState, setPanelState] = useState<PanelState>({ type: 'none' });
   const [pendingToolCallId, setPendingToolCallId] = useState<string | null>(null);
+  const [progressOverlay, setProgressOverlay] = useState<{ label: string; percent: number } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const initializedRef = useRef(false);
 
@@ -92,6 +93,7 @@ export function useChatAgent(projectId: string) {
                 id: event.id,
                 name: event.name,
                 status: 'running',
+                subtasks: event.subtasks,
               };
               setMessages((prev) =>
                 prev.map((m) =>
@@ -111,18 +113,18 @@ export function useChatAgent(projectId: string) {
                         ...m,
                         toolCalls: m.toolCalls?.map((tc) =>
                           tc.id === event.id
-                            ? { ...tc, progress: event.percent }
+                            ? { ...tc, progress: event.percent, subtasks: event.subtasks || tc.subtasks }
                             : tc,
                         ),
                       }
                     : m,
                 ),
               );
-              // Update progress panel
+              // Update progress overlay (shown on video panel, not replacing it)
               if (event.percent !== undefined) {
-                setPanelState({
-                  type: 'progress',
-                  data: { label: event.message || 'Processing...', percent: event.percent },
+                setProgressOverlay({
+                  label: event.message || 'Processing...',
+                  percent: event.percent,
                 });
               }
               break;
@@ -159,11 +161,9 @@ export function useChatAgent(projectId: string) {
                 setPendingToolCallId(event.pendingToolCallId);
               } else {
                 setPendingToolCallId(null);
-                // Clear progress panel when done (but not review/subtitle/download panels)
-                setPanelState((prev) =>
-                  prev.type === 'progress' ? { type: 'none' } : prev,
-                );
               }
+              // Clear progress overlay when done
+              setProgressOverlay(null);
               // Reset for next iteration in multi-turn
               currentAssistantId = null;
               break;
@@ -292,6 +292,7 @@ export function useChatAgent(projectId: string) {
     isStreaming,
     panelState,
     pendingToolCallId,
+    progressOverlay,
     sendMessage,
     submitPanelData,
     setPanelState,

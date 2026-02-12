@@ -23,6 +23,8 @@ interface WaveformPlayerProps {
   audioUrl: string;
   onTimeUpdate?: (time: number) => void;
   onReady?: (duration: number) => void;
+  onPlay?: () => void;
+  onPause?: () => void;
   wsRef?: React.MutableRefObject<WaveSurferInstance | null>;
   /** Segments marked for removal - shown as semi-transparent overlay on the waveform */
   removeSegments?: RemoveSegment[];
@@ -38,6 +40,8 @@ export const WaveformPlayer = memo(function WaveformPlayer({
   audioUrl,
   onTimeUpdate,
   onReady,
+  onPlay,
+  onPause,
   wsRef,
   removeSegments = [],
 }: WaveformPlayerProps) {
@@ -46,11 +50,16 @@ export const WaveformPlayer = memo(function WaveformPlayer({
   const regionsPluginRef = useRef<{ addRegion: (opts: { start: number; end: number; color?: string; drag?: boolean; resize?: boolean }) => void; clearRegions: () => void } | null>(null);
   const [time, setTime] = useState('00:00 / 00:00');
   const [speed, setSpeed] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(false);
   const onTimeUpdateRef = useRef(onTimeUpdate);
   const onReadyRef = useRef(onReady);
+  const onPlayRef = useRef(onPlay);
+  const onPauseRef = useRef(onPause);
   const removeSegmentsRef = useRef(removeSegments);
   onTimeUpdateRef.current = onTimeUpdate;
   onReadyRef.current = onReady;
+  onPlayRef.current = onPlay;
+  onPauseRef.current = onPause;
   removeSegmentsRef.current = removeSegments;
 
   const applyRemoveRegions = useCallback(() => {
@@ -120,6 +129,19 @@ export const WaveformPlayer = memo(function WaveformPlayer({
         setTime(`${formatTime(currentTime)} / ${formatTime(dur)}`);
         onTimeUpdateRef.current?.(currentTime);
       });
+
+      ws.on('play', () => {
+        setIsPlaying(true);
+        onPlayRef.current?.();
+      });
+      ws.on('pause', () => {
+        setIsPlaying(false);
+        onPauseRef.current?.();
+      });
+      ws.on('finish', () => {
+        setIsPlaying(false);
+        onPauseRef.current?.();
+      });
     };
 
     init();
@@ -147,17 +169,27 @@ export const WaveformPlayer = memo(function WaveformPlayer({
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex items-center justify-center gap-3 mb-3">
+        <span className="font-mono text-neutral-500 text-sm">{time}</span>
         <button
           onClick={() => internalRef.current?.playPause()}
-          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm font-medium transition-colors"
+          className="w-10 h-10 flex items-center justify-center rounded-full bg-neutral-700 hover:bg-neutral-600 text-white transition-colors"
+          aria-label={isPlaying ? 'Pause' : 'Play'}
         >
-          Play/Pause
+          {isPlaying ? (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5">
+              <path fillRule="evenodd" d="M6.75 5.25a.75.75 0 0 1 .75-.75H9a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H7.5a.75.75 0 0 1-.75-.75V5.25Zm7.5 0A.75.75 0 0 1 15 4.5h1.5a.75.75 0 0 1 .75.75v13.5a.75.75 0 0 1-.75.75H15a.75.75 0 0 1-.75-.75V5.25Z" clipRule="evenodd" />
+            </svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 ml-0.5">
+              <path fillRule="evenodd" d="M4.5 5.653c0-1.427 1.529-2.33 2.779-1.643l11.54 6.347c1.295.712 1.295 2.573 0 3.286L7.28 19.99c-1.25.687-2.779-.217-2.779-1.643V5.653Z" clipRule="evenodd" />
+            </svg>
+          )}
         </button>
         <select
           value={speed}
           onChange={handleSpeedChange}
-          className="px-3 py-2 bg-neutral-700 text-white border-none rounded text-sm cursor-pointer"
+          className="px-2 py-1 bg-neutral-700 text-white border-none rounded text-sm cursor-pointer"
         >
           <option value="0.5">0.5x</option>
           <option value="0.75">0.75x</option>
@@ -166,7 +198,6 @@ export const WaveformPlayer = memo(function WaveformPlayer({
           <option value="1.5">1.5x</option>
           <option value="2">2x</option>
         </select>
-        <span className="font-mono text-neutral-500 text-sm">{time}</span>
       </div>
       <div ref={containerRef} className="bg-neutral-800 rounded" />
     </div>

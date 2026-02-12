@@ -44,6 +44,12 @@ export interface ChatMessage {
   timestamp: number;
 }
 
+export interface SubtaskStatus {
+  id: string;
+  label: string;
+  status: 'pending' | 'running' | 'done';
+}
+
 export interface ToolCallStatus {
   id: string;
   name: string;
@@ -51,13 +57,14 @@ export interface ToolCallStatus {
   progress?: number;
   summary?: string;
   error?: string;
+  subtasks?: SubtaskStatus[];
 }
 
 // SSE event types streamed from POST /api/chat
 export type ChatSSEEvent =
   | { type: 'text_delta'; delta: string }
-  | { type: 'tool_call'; id: string; name: string }
-  | { type: 'tool_progress'; id: string; percent: number; message?: string }
+  | { type: 'tool_call'; id: string; name: string; subtasks?: SubtaskStatus[] }
+  | { type: 'tool_progress'; id: string; percent: number; message?: string; subtasks?: SubtaskStatus[] }
   | { type: 'tool_result'; id: string; name: string; summary: string }
   | { type: 'ui_panel'; panel: PanelType; data: unknown }
   | { type: 'done'; pendingToolCallId?: string }

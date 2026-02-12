@@ -94,29 +94,9 @@ export const agentTools: Tool[] = [
     },
   },
   {
-    name: 'generate_subtitles',
+    name: 'attach_subtitles',
     description:
-      'Generate subtitle entries from the transcript, accounting for deleted segments. Returns the number of subtitle lines created.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'show_subtitle_editor',
-    description:
-      'Show the interactive subtitle editor where the user can review and edit subtitle text and timing. The agent MUST call this tool and wait for the user to confirm before proceeding to burn subtitles.',
-    input_schema: {
-      type: 'object' as const,
-      properties: {},
-      required: [],
-    },
-  },
-  {
-    name: 'burn_subtitles',
-    description:
-      'Burn the subtitles into the video using FFmpeg. This creates a final video file with hard-coded subtitles. This is a long-running operation with progress updates.',
+      'Burn/attach subtitles onto the video. Subtitles are auto-generated after cut completes; this tool burns them into the video file. This is a long-running operation with progress updates.',
     input_schema: {
       type: 'object' as const,
       properties: {
@@ -125,6 +105,16 @@ export const agentTools: Tool[] = [
           description: 'Subtitle outline width (1-5). Default is 2.',
         },
       },
+      required: [],
+    },
+  },
+  {
+    name: 'show_subtitle_editor',
+    description:
+      'Show the interactive subtitle editor where the user can review and edit subtitle text and timing. Only use this if the user explicitly wants to edit subtitle text before burning. Otherwise, call attach_subtitles directly.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
       required: [],
     },
   },
@@ -140,4 +130,4 @@ export const agentTools: Tool[] = [
   },
 ];
 
-export const UI_TOOLS = new Set(['show_review_panel', 'show_subtitle_editor']);
+export const UI_TOOLS = new Set(['show_review_panel']);

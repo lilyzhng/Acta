@@ -32,11 +32,36 @@ export async function GET(
     const end = parts[1] ? parseInt(parts[1], 10) : stat.size - 1;
 
     const stream = fs.createReadStream(filePath, { start, end });
+    let closed = false;
+    
     const readableStream = new ReadableStream({
       start(controller) {
-        stream.on('data', (chunk) => controller.enqueue(chunk));
-        stream.on('end', () => controller.close());
-        stream.on('error', (err) => controller.error(err));
+        stream.on('data', (chunk) => {
+          if (!closed) {
+            try {
+              controller.enqueue(chunk);
+            } catch {
+              closed = true;
+              stream.destroy();
+            }
+          }
+        });
+        stream.on('end', () => {
+          if (!closed) {
+            closed = true;
+            try { controller.close(); } catch { /* already closed */ }
+          }
+        });
+        stream.on('error', (err) => {
+          if (!closed) {
+            closed = true;
+            try { controller.error(err); } catch { /* already closed */ }
+          }
+        });
+      },
+      cancel() {
+        closed = true;
+        stream.destroy();
       },
     });
 
@@ -47,16 +72,42 @@ export async function GET(
         'Content-Range': `bytes ${start}-${end}/${stat.size}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': String(end - start + 1),
+        'Cache-Control': 'no-cache',
       },
     });
   }
 
   const stream = fs.createReadStream(filePath);
+  let closed = false;
+  
   const readableStream = new ReadableStream({
     start(controller) {
-      stream.on('data', (chunk) => controller.enqueue(chunk));
-      stream.on('end', () => controller.close());
-      stream.on('error', (err) => controller.error(err));
+      stream.on('data', (chunk) => {
+        if (!closed) {
+          try {
+            controller.enqueue(chunk);
+          } catch {
+            closed = true;
+            stream.destroy();
+          }
+        }
+      });
+      stream.on('end', () => {
+        if (!closed) {
+          closed = true;
+          try { controller.close(); } catch { /* already closed */ }
+        }
+      });
+      stream.on('error', (err) => {
+        if (!closed) {
+          closed = true;
+          try { controller.error(err); } catch { /* already closed */ }
+        }
+      });
+    },
+    cancel() {
+      closed = true;
+      stream.destroy();
     },
   });
 
@@ -66,6 +117,7 @@ export async function GET(
       'Content-Type': 'video/mp4',
       'Content-Length': String(stat.size),
       'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache',
     },
   });
 }

@@ -14,7 +14,13 @@ export async function GET(
   }
 
   const dir = getProjectDir(id);
-  const audioPath = path.join(dir, project.audioFile || 'audio.mp3');
+  
+  // Support ?cut=true to get cut video's audio
+  const useCutAudio = req.nextUrl.searchParams.get('cut') === 'true';
+  const audioFile = useCutAudio && project.cutAudioFile 
+    ? project.cutAudioFile 
+    : (project.audioFile || 'audio.mp3');
+  const audioPath = path.join(dir, audioFile);
 
   if (!fs.existsSync(audioPath)) {
     return new Response('Audio Not Found', { status: 404 });

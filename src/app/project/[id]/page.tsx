@@ -1,9 +1,9 @@
 'use client';
 
-import { use, useCallback } from 'react';
+import { use } from 'react';
 import { useChatAgent } from '@/hooks/useChatAgent';
 import { ChatPanel } from '@/components/chat/ChatPanel';
-import { AdaptivePanel } from '@/components/panels/AdaptivePanel';
+import { UnifiedProjectPanel } from '@/components/panels/UnifiedProjectPanel';
 
 export default function ProjectPage({
   params,
@@ -17,12 +17,7 @@ export default function ProjectPage({
     panelState,
     pendingToolCallId,
     sendMessage,
-    submitPanelData,
   } = useChatAgent(projectId);
-
-  const handleConfirmPanel = useCallback(() => {
-    // This is handled by the panel components themselves via onSubmitPanel
-  }, []);
 
   const pendingPanel = pendingToolCallId
     ? panelState.type === 'review'
@@ -32,25 +27,25 @@ export default function ProjectPage({
       : null
     : null;
 
+  // Use panelState changes to trigger refresh in UnifiedProjectPanel
+  // Generate a refresh key that changes when panel events occur
+  const refreshKey = panelState.type + JSON.stringify(panelState.data || {});
+
   return (
     <div className="flex h-screen bg-neutral-950">
-      {/* Left: Adaptive content panel */}
-      <div className="flex-1 overflow-auto border-r border-neutral-800">
-        <AdaptivePanel
-          projectId={projectId}
-          panelState={panelState}
-          onSubmitPanel={submitPanelData}
-        />
+      {/* Column 1 & 2: Video + Waveform | Transcription/Subtitles */}
+      <div className="flex-1 overflow-hidden">
+        <UnifiedProjectPanel projectId={projectId} refreshTrigger={refreshKey} />
       </div>
 
-      {/* Right: Chat panel */}
-      <div className="w-[420px] flex-shrink-0 flex flex-col">
+      {/* Column 3: Chat panel */}
+      <div className="w-[380px] flex-shrink-0 flex flex-col border-l border-neutral-800">
         <ChatPanel
           messages={messages}
           isStreaming={isStreaming}
           pendingPanel={pendingPanel}
           onSendMessage={sendMessage}
-          onConfirmPanel={handleConfirmPanel}
+          onConfirmPanel={() => {}}
         />
       </div>
     </div>

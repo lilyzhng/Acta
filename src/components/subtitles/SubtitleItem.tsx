@@ -42,6 +42,7 @@ export const SubtitleItem = memo(function SubtitleItem({
 
   return (
     <div
+      data-sub-idx={index}
       className={`px-4 py-3 border-b border-neutral-800 cursor-pointer transition-colors ${
         isActive ? 'bg-blue-900/30 border-l-2 border-l-green-500' : 'hover:bg-neutral-800/50'
       } ${isEditing ? 'bg-blue-900/20' : ''}`}

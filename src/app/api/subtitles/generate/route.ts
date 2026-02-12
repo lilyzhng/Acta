@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProject, getProjectDir, updateProject } from '@/lib/project-store';
-import { generateSubtitleWords, groupIntoSubtitles } from '@/lib/subtitles';
+import { groupIntoSubtitlesByUtterance } from '@/lib/subtitles';
 import type { VolcengineResult, DeleteSegment } from '@/types';
 import fs from 'fs';
 import path from 'path';
@@ -30,11 +30,8 @@ export async function POST(req: NextRequest) {
     deleteSegments = JSON.parse(fs.readFileSync(deleteSegmentsPath, 'utf8'));
   }
 
-  // Generate subtitle words with timestamp remapping
-  const words = generateSubtitleWords(volcResult, deleteSegments);
-
-  // Group into subtitle lines
-  const subtitles = groupIntoSubtitles(words);
+  // Generate subtitles using utterance boundaries (natural speech pauses)
+  const subtitles = groupIntoSubtitlesByUtterance(volcResult, deleteSegments);
 
   // Save
   const subtitlesPath = path.join(dir, 'subtitles_with_time.json');

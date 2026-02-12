@@ -30,5 +30,12 @@ export async function GET(req: NextRequest) {
     autoSelected = JSON.parse(fs.readFileSync(autoSelectedPath, 'utf8'));
   }
 
-  return NextResponse.json({ words, autoSelected });
+  // Load selected indices (what was actually removed after review)
+  let selectedIndices: number[] = [];
+  const selectedPath = path.join(dir, 'selected_indices.json');
+  if (fs.existsSync(selectedPath)) {
+    selectedIndices = JSON.parse(fs.readFileSync(selectedPath, 'utf8'));
+  }
+
+  return NextResponse.json({ words, autoSelected, selectedIndices });
 }

@@ -141,3 +141,141 @@ export function groupIntoSubtitles(words: SubtitleWord[]): Subtitle[] {
 
   return subtitles;
 }
+
+/**
+ * Group subtitles by Volcengine utterance boundaries (natural speech pauses)
+ * Each utterance represents a natural sentence/phrase from the transcription.
+ * Long utterances are split at word boundaries (~40 chars max per subtitle).
+ */
+export function groupIntoSubtitlesByUtterance(
+  result: VolcengineResult,
+  deleteSegments?: DeleteSegment[]
+): Subtitle[] {
+  const subtitles: Subtitle[] = [];
+  const MAX_CHARS = 40;
+
+  // Helper to check if a time range overlaps with any delete segment
+  function isDeleted(start: number, end: number): boolean {
+    if (!deleteSegments || deleteSegments.length === 0) return false;
+    for (const seg of deleteSegments) {
+      if (start < seg.end && end > seg.start) return true;
+    }
+    return false;
+  }
+
+  // Helper to calculate deleted time before a given timestamp
+  function getDeletedTimeBefore(time: number): number {
+    if (!deleteSegments || deleteSegments.length === 0) return 0;
+    let deleted = 0;
+    for (const seg of deleteSegments) {
+      if (seg.end <= time) {
+        deleted += seg.end - seg.start;
+      } else if (seg.start < time) {
+        deleted += time - seg.start;
+      }
+    }
+    return deleted;
+  }
+
+  for (const utterance of result.utterances) {
+    // Always process at word level to properly filter deleted words
+    // Use word-level data if available for accurate timestamps
+    if (utterance.words && utterance.words.length > 0) {
+      let currentText = '';
+      let currentStart = -1;
+      let currentEnd = 0;
+
+      for (const word of utterance.words) {
+        const wordStart = word.start_time / 1000;
+        const wordEnd = word.end_time / 1000;
+
+        // Skip deleted words
+        if (isDeleted(wordStart, wordEnd)) continue;
+
+        const remappedWordStart = Math.round((wordStart - getDeletedTimeBefore(wordStart)) * 100) / 100;
+        const remappedWordEnd = Math.round((wordEnd - getDeletedTimeBefore(wordEnd)) * 100) / 100;
+
+        if (currentStart < 0) currentStart = remappedWordStart;
+
+        // Add space between words (for languages that use spaces)
+        const separator = currentText.length > 0 ? ' ' : '';
+        const newText = currentText + separator + word.text;
+
+        if (newText.length > MAX_CHARS && currentText.length > 0) {
+          // Push current subtitle and start new one
+          subtitles.push({
+            text: currentText,
+            start: currentStart,
+            end: currentEnd,
+          });
+          currentText = word.text;
+          currentStart = remappedWordStart;
+          currentEnd = remappedWordEnd;
+        } else {
+          currentText = newText;
+          currentEnd = remappedWordEnd;
+        }
+      }
+
+      // Add remaining text
+      if (currentText && currentStart >= 0) {
+        subtitles.push({
+          text: currentText,
+          start: currentStart,
+          end: currentEnd,
+        });
+      }
+    } else {
+      // No word-level data - use utterance text directly
+      // This is a fallback; Volcengine typically provides word-level data
+      const uttStart = utterance.start_time / 1000;
+      const uttEnd = utterance.end_time / 1000;
+      
+      // Skip if entire utterance is deleted (can't filter at word level)
+      if (isDeleted(uttStart, uttEnd)) continue;
+      
+      const text = utterance.text.trim();
+      if (!text) continue;
+      
+      const remappedStart = Math.round((uttStart - getDeletedTimeBefore(uttStart)) * 100) / 100;
+      const remappedEnd = Math.round((uttEnd - getDeletedTimeBefore(uttEnd)) * 100) / 100;
+
+      // Split by spaces and distribute time evenly
+      const words = text.split(/\s+/);
+      const duration = remappedEnd - remappedStart;
+      const timePerWord = duration / words.length;
+
+      let currentText = '';
+      let currentStart = remappedStart;
+      let wordIndex = 0;
+
+      for (const word of words) {
+        const separator = currentText.length > 0 ? ' ' : '';
+        const newText = currentText + separator + word;
+
+        if (newText.length > MAX_CHARS && currentText.length > 0) {
+          subtitles.push({
+            text: currentText,
+            start: currentStart,
+            end: Math.round((remappedStart + wordIndex * timePerWord) * 100) / 100,
+          });
+          currentText = word;
+          currentStart = Math.round((remappedStart + wordIndex * timePerWord) * 100) / 100;
+        } else {
+          currentText = newText;
+        }
+        wordIndex++;
+      }
+
+      if (currentText) {
+        subtitles.push({
+          text: currentText,
+          start: currentStart,
+          end: remappedEnd,
+        });
+      }
+    }
+  }
+
+  return subtitles;
+}

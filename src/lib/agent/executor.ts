@@ -4,18 +4,19 @@ import { getProject, getProjectDir, updateProject } from '@/lib/project-store';
 import { extractAudio, executeFFmpegCut, burnSubtitles, getVideoDuration } from '@/lib/ffmpeg';
 import { uploadToUguu } from '@/lib/upload';
 import { submitTranscription, queryTranscription } from '@/lib/volcengine';
-import { generateSubtitleWords, groupIntoSubtitles } from '@/lib/subtitles';
+import { generateSubtitleWords, groupIntoSubtitlesByUtterance } from '@/lib/subtitles';
 import { generateSRT, generateReadableTranscript } from '@/lib/srt';
 import { runHybridAnalysis } from '@/lib/analysis';
 import { indicesToDeleteSegments } from '@/lib/segment-merger';
-import type { VolcengineResult, SubtitleWord, Subtitle, DeleteSegment } from '@/types';
+import type { VolcengineResult, SubtitleWord, Subtitle, DeleteSegment, SubtaskStatus } from '@/types';
 
-type ProgressCallback = (data: { id: string; percent: number; message?: string }) => void;
+type ProgressCallback = (data: { id: string; percent: number; message?: string; subtasks?: SubtaskStatus[] }) => void;
 
 interface ToolResult {
   result: string;
   uiPanel?: { panel: string; data: unknown };
   emitEvent?: { type: 'ui_panel'; panel: string; data: unknown };
+  initialSubtasks?: SubtaskStatus[];
 }
 
 export async function executeTool(
@@ -42,12 +43,10 @@ export async function executeTool(
       return executeShowReviewPanel(projectId);
     case 'execute_cut':
       return executeExecuteCut(projectId, toolCallId, onProgress);
-    case 'generate_subtitles':
-      return executeGenerateSubtitles(projectId);
+    case 'attach_subtitles':
+      return executeAttachSubtitles(projectId, toolCallId, input, onProgress);
     case 'show_subtitle_editor':
       return executeShowSubtitleEditor(projectId);
-    case 'burn_subtitles':
-      return executeBurnSubtitles(projectId, toolCallId, input, onProgress);
     case 'provide_download_links':
       return executeProvideDownloadLinks(projectId);
     default:
@@ -118,46 +117,78 @@ async function executeAutoCut(
   const project = getProject(projectId);
   if (!project) return { result: 'Project not found.' };
 
+  // Define subtasks with their initial states
+  const subtasks: SubtaskStatus[] = [
+    { id: 'transcribe', label: 'Transcribe video', status: 'pending' },
+    { id: 'analyze', label: 'Detect filler words', status: 'pending' },
+    { id: 'cut', label: 'Cut video', status: 'pending' },
+  ];
+
+  // Helper to update subtask status
+  const updateSubtask = (id: string, status: 'pending' | 'running' | 'done') => {
+    const subtask = subtasks.find(s => s.id === id);
+    if (subtask) subtask.status = status;
+  };
+
+  // Emit initial subtasks
+  onProgress?.({ id: toolCallId, percent: 0, message: 'Starting auto cut...', subtasks: [...subtasks] });
+
   // Step 1: Transcribe if needed
+  updateSubtask('transcribe', 'running');
+  onProgress?.({ id: toolCallId, percent: 5, message: 'Transcribing...', subtasks: [...subtasks] });
+
   if (!project.volcengineResult) {
     const transcribeResult = await executeTranscribeVideo(projectId, toolCallId, (p) =>
-      onProgress?.({ ...p, percent: p.percent * 0.3 }),
+      onProgress?.({ ...p, percent: Math.round(p.percent * 0.3), subtasks: [...subtasks] }),
     );
     if (transcribeResult.result.includes('failed') || transcribeResult.result.includes('not found')) {
       return transcribeResult;
     }
   }
 
+  updateSubtask('transcribe', 'done');
+  onProgress?.({ id: toolCallId, percent: 30, message: 'Transcription complete', subtasks: [...subtasks] });
+
   // Step 2: Analyze if needed
+  updateSubtask('analyze', 'running');
+  onProgress?.({ id: toolCallId, percent: 32, message: 'Analyzing transcript...', subtasks: [...subtasks] });
+
   const proj = getProject(projectId)!;
   if (!proj.autoSelected) {
     const analyzeResult = await executeAnalyzeTranscript(projectId, toolCallId, (p) =>
-      onProgress?.({ ...p, percent: 30 + p.percent * 0.2 }),
+      onProgress?.({ ...p, percent: 30 + Math.round(p.percent * 0.2), subtasks: [...subtasks] }),
     );
     if (analyzeResult.result.includes('failed') || analyzeResult.result.includes('not found')) {
       return analyzeResult;
     }
   }
 
-  // Step 3: Remove all flagged words
+  updateSubtask('analyze', 'done');
+  onProgress?.({ id: toolCallId, percent: 50, message: 'Analysis complete', subtasks: [...subtasks] });
+
+  // Step 3: Remove all flagged words (quick, no subtask needed)
   const removeResult = await executeRemoveWords(projectId, { mode: 'all_flagged' });
   if (removeResult.result.includes('Provide') || removeResult.result.includes('not found')) {
     return removeResult;
   }
-  onProgress?.({ id: toolCallId, percent: 52, message: 'Words selected...' });
+  onProgress?.({ id: toolCallId, percent: 52, message: 'Words selected...', subtasks: [...subtasks] });
 
   // Step 4: Execute cut
+  updateSubtask('cut', 'running');
+  onProgress?.({ id: toolCallId, percent: 55, message: 'Cutting video...', subtasks: [...subtasks] });
+
   const cutResult = await executeExecuteCut(
     projectId,
     toolCallId,
-    (p) => onProgress?.({ ...p, percent: 55 + p.percent * 0.45 }),
+    (p) => onProgress?.({ ...p, percent: 55 + Math.round(p.percent * 0.45), subtasks: [...subtasks] }),
   );
 
-  onProgress?.({ id: toolCallId, percent: 100, message: 'Auto cut complete' });
-  return {
-    ...cutResult,
-    emitEvent: removeResult.emitEvent,
-  };
+  updateSubtask('cut', 'done');
+  onProgress?.({ id: toolCallId, percent: 100, message: 'Auto cut complete', subtasks: [...subtasks] });
+
+  // Use cutResult's emitEvent (video panel) instead of removeResult's (word_preview)
+  // This ensures the UI switches to show the cut video after completion
+  return cutResult;
 }
 
 async function executeTranscribeVideo(
@@ -457,7 +488,20 @@ async function executeExecuteCut(
     const deletedDuration = originalDuration - newDuration;
     const savedPercent = ((deletedDuration / originalDuration) * 100).toFixed(1);
 
-    updateProject(projectId, { status: 'cut', cutVideoFile: outputFile });
+    // Extract audio from cut video for waveform display
+    const cutAudioFile = `${baseName}_cut_audio.mp3`;
+    const cutAudioPath = path.join(dir, cutAudioFile);
+    try {
+      extractAudio(outputPath, cutAudioPath);
+    } catch {
+      // Non-fatal: waveform just won't be available for cut video
+    }
+
+    updateProject(projectId, { 
+      status: 'cut', 
+      cutVideoFile: outputFile,
+      cutAudioFile: fs.existsSync(cutAudioPath) ? cutAudioFile : undefined,
+    });
     onProgress?.({ id: toolCallId, percent: 100, message: 'Cut complete' });
 
     // Trigger evolve if there are enough corrections
@@ -480,46 +524,17 @@ async function executeExecuteCut(
 
     return {
       result: `Video cut complete. Removed ${deletedDuration.toFixed(1)}s (${savedPercent}% of original ${originalDuration.toFixed(1)}s). New duration: ${newDuration.toFixed(1)}s.`,
+      // Emit event to refresh the video panel with the cut video
+      emitEvent: {
+        type: 'ui_panel',
+        panel: 'video',
+        data: { cutVideoFile: outputFile },
+      },
     };
   }
 
   updateProject(projectId, { status: 'reviewed' });
   return { result: `Video cut failed: ${result.error}` };
-}
-
-async function executeGenerateSubtitles(projectId: string): Promise<ToolResult> {
-  const project = getProject(projectId);
-  if (!project) return { result: 'Project not found.' };
-
-  const dir = getProjectDir(projectId);
-  const resultPath = path.join(dir, project.volcengineResult || 'volcengine_result.json');
-
-  if (!fs.existsSync(resultPath)) {
-    return { result: 'No transcription result found. Run transcribe_video first.' };
-  }
-
-  const volcResult: VolcengineResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
-
-  // Load delete segments if they exist
-  let deleteSegments: DeleteSegment[] | undefined;
-  const deleteSegmentsPath = path.join(dir, 'delete_segments.json');
-  if (fs.existsSync(deleteSegmentsPath)) {
-    deleteSegments = JSON.parse(fs.readFileSync(deleteSegmentsPath, 'utf8'));
-  }
-
-  const words = generateSubtitleWords(volcResult, deleteSegments);
-  const subtitles = groupIntoSubtitles(words);
-
-  // Save
-  const subtitlesPath = path.join(dir, 'subtitles_with_time.json');
-  fs.writeFileSync(subtitlesPath, JSON.stringify(subtitles, null, 2));
-
-  updateProject(projectId, {
-    subtitlesWithTime: 'subtitles_with_time.json',
-    status: 'subtitles_ready',
-  });
-
-  return { result: `Generated ${subtitles.length} subtitle entries.` };
 }
 
 async function executeShowSubtitleEditor(projectId: string): Promise<ToolResult> {
@@ -530,7 +545,7 @@ async function executeShowSubtitleEditor(projectId: string): Promise<ToolResult>
   const subtitlesPath = path.join(dir, project.subtitlesWithTime || 'subtitles_with_time.json');
 
   if (!fs.existsSync(subtitlesPath)) {
-    return { result: 'No subtitles found. Run generate_subtitles first.' };
+    return { result: 'No subtitles found. Subtitles are auto-generated after cut completes.' };
   }
 
   const subtitles: Subtitle[] = JSON.parse(fs.readFileSync(subtitlesPath, 'utf8'));
@@ -544,22 +559,48 @@ async function executeShowSubtitleEditor(projectId: string): Promise<ToolResult>
   };
 }
 
-async function executeBurnSubtitles(
+async function executeAttachSubtitles(
   projectId: string,
   toolCallId: string,
   input: Record<string, unknown>,
   onProgress?: ProgressCallback,
 ): Promise<ToolResult> {
-  const project = getProject(projectId);
+  let project = getProject(projectId);
   if (!project) return { result: 'Project not found.' };
 
   const dir = getProjectDir(projectId);
   const videoFileName = project.cutVideoFile || project.videoFile;
   const videoPath = path.join(dir, videoFileName);
 
-  const subtitlesPath = path.join(dir, project.subtitlesWithTime || 'subtitles_with_time.json');
+  // Generate subtitles first if they don't exist
+  let subtitlesPath = path.join(dir, project.subtitlesWithTime || 'subtitles_with_time.json');
   if (!fs.existsSync(subtitlesPath)) {
-    return { result: 'No subtitles found. Run generate_subtitles first.' };
+    // Auto-generate subtitles
+    const resultPath = path.join(dir, project.volcengineResult || 'volcengine_result.json');
+    if (!fs.existsSync(resultPath)) {
+      return { result: 'No transcription result found. Run transcribe_video first.' };
+    }
+
+    const volcResult: VolcengineResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+
+    // Load delete segments if they exist
+    let deleteSegments: DeleteSegment[] | undefined;
+    const deleteSegmentsPath = path.join(dir, 'delete_segments.json');
+    if (fs.existsSync(deleteSegmentsPath)) {
+      deleteSegments = JSON.parse(fs.readFileSync(deleteSegmentsPath, 'utf8'));
+    }
+
+    const subtitles = groupIntoSubtitlesByUtterance(volcResult, deleteSegments);
+    subtitlesPath = path.join(dir, 'subtitles_with_time.json');
+    fs.writeFileSync(subtitlesPath, JSON.stringify(subtitles, null, 2));
+
+    updateProject(projectId, {
+      subtitlesWithTime: 'subtitles_with_time.json',
+      status: 'subtitles_ready',
+    });
+    
+    // Refresh project
+    project = getProject(projectId)!;
   }
 
   const subtitles: Subtitle[] = JSON.parse(fs.readFileSync(subtitlesPath, 'utf8'));
@@ -597,7 +638,15 @@ async function executeBurnSubtitles(
     });
     onProgress?.({ id: toolCallId, percent: 100, message: 'Burn complete' });
 
-    return { result: `Subtitles burned into video. Output: ${baseName}_subtitled.mp4` };
+    return { 
+      result: `Subtitles burned into video. Output: ${baseName}_subtitled.mp4`,
+      // Emit event to refresh the video panel to show the subtitled video
+      emitEvent: {
+        type: 'ui_panel',
+        panel: 'video',
+        data: { subtitlesAttached: true, burnedVideoFile: `${baseName}_subtitled.mp4` },
+      },
+    };
   }
 
   updateProject(projectId, { status: 'subtitles_ready' });

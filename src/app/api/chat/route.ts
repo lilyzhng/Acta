@@ -208,6 +208,7 @@ async function runAgentLoop(
             id: progress.id,
             percent: progress.percent,
             message: progress.message,
+            subtasks: progress.subtasks,
           });
         },
       );
