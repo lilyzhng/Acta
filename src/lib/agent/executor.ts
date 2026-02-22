@@ -86,9 +86,9 @@ async function executeGetProjectStatus(projectId: string): Promise<ToolResult> {
     transcribed: 'Transcription complete, ready for analysis',
     analyzing: 'AI analysis in progress',
     analyzed: 'Analysis complete, ready for human review',
-    reviewed: 'User review complete, ready to cut video',
+    reviewed: 'User review complete, ready to cut video or attach subtitles',
     cutting: 'Video cut in progress',
-    cut: 'Video cut complete, ready for subtitle generation',
+    cut: 'Video cut complete, ready for subtitles or download',
     subtitles_ready: 'Subtitles generated, ready for editing',
     burning: 'Burning subtitles into video',
     done: 'All processing complete, files ready for download',
@@ -563,7 +563,7 @@ async function executeShowSubtitleEditor(projectId: string): Promise<ToolResult>
   const subtitlesPath = path.join(dir, project.subtitlesWithTime || 'subtitles_with_time.json');
 
   if (!fs.existsSync(subtitlesPath)) {
-    return { result: 'No subtitles found. Subtitles are auto-generated after cut completes.' };
+    return { result: 'No subtitles found. Use attach_subtitles to generate and burn subtitles, or run transcribe_video first if no transcription exists.' };
   }
 
   const subtitles: Subtitle[] = JSON.parse(fs.readFileSync(subtitlesPath, 'utf8'));
