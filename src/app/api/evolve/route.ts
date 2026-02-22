@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getProjectDir } from '@/lib/project-store';
-import Anthropic from '@anthropic-ai/sdk';
+import { anthropic } from '@/lib/anthropic';
 import fs from 'fs';
 import path from 'path';
 import type { FeedbackCorrection, EvolveResult } from '@/types';
-
-const client = new Anthropic();
 
 const RULES_DIR = path.join(process.cwd(), 'detection-rules');
 
@@ -99,7 +97,7 @@ ${ruleFilesText}
 Analyze the corrections above. Determine which rule files should be updated to prevent these errors in the future. Output the JSON result.`;
 
   try {
-    const response = await client.messages.create({
+    const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-5-20250929',
       max_tokens: 8192,
       system: systemPrompt,

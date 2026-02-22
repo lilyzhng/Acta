@@ -67,7 +67,7 @@ acta-web/
 │   ├── data/subtitles_words.json             # Real test data
 │   └── analysis-rules.test.ts                # 11 unit tests
 ├── jest.config.js
-└── .env.local                                # VOLCENGINE_API_KEY, ANTHROPIC_API_KEY
+└── .env.local                                # VOLCENGINE_API_KEY, ANTHROPIC_AUTH_TOKEN
 ```
 
 ## Hybrid AI Analysis
@@ -125,7 +125,8 @@ brew install node
 cp .env.example .env.local
 # Fill in:
 # VOLCENGINE_API_KEY=your_key
-# ANTHROPIC_API_KEY=your_key
+# ANTHROPIC_AUTH_TOKEN=your_token  (Max plan, preferred)
+# ANTHROPIC_API_KEY=your_key       (API credits, fallback)
 ```
 
 ### Running

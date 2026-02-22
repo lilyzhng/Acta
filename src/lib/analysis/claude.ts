@@ -1,9 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
+import { anthropic } from '@/lib/anthropic';
 import type { SubtitleWord, ClaudeResult } from '@/types';
-
-const client = new Anthropic();
 
 /**
  * Load the original SKILL.md as system prompt context.
@@ -179,7 +177,7 @@ If no stutters found, output:
 []
 \`\`\``;
 
-  const response = await client.messages.create({
+  const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-5-20250929',
     max_tokens: 4096,
     system: systemPrompt,

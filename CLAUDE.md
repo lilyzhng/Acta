@@ -175,7 +175,8 @@ This is converted to `SubtitleWord[]` with gap detection (see `src/lib/subtitles
 Required in `.env.local`:
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...        # Claude API
+ANTHROPIC_AUTH_TOKEN=...             # Claude Max plan auth token (preferred)
+# ANTHROPIC_API_KEY=sk-ant-...      # Claude API (fallback, pay-per-token)
 VOLC_ACCESS_KEY=...                 # Volcengine transcription
 VOLC_SECRET_KEY=...
 VOLC_APP_ID=...

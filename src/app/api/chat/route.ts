@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
+import { anthropic } from '@/lib/anthropic';
 import { getProject, getProjectDir, updateProject } from '@/lib/project-store';
 import { loadConversation, saveConversation } from '@/lib/agent/conversation';
 import { agentTools, UI_TOOLS } from '@/lib/agent/tools';
@@ -109,11 +110,9 @@ async function runAgentLoop(
   conversation: ConversationState,
   emit: (event: ChatSSEEvent) => void,
 ): Promise<void> {
-  const client = new Anthropic();
-
   for (let iteration = 0; iteration < MAX_AGENT_ITERATIONS; iteration++) {
     // Call Claude with streaming
-    const stream = client.messages.stream({
+    const stream = anthropic.messages.stream({
       model: 'claude-sonnet-4-5-20250929',
       max_tokens: 1024,
       system: SYSTEM_PROMPT,
