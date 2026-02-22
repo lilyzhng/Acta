@@ -96,7 +96,7 @@ export const agentTools: Tool[] = [
   {
     name: 'attach_subtitles',
     description:
-      'Burn/attach subtitles onto the video. Subtitles are auto-generated after cut completes; this tool burns them into the video file. This is a long-running operation with progress updates.',
+      'Burn/attach subtitles onto the video. Subtitles are auto-generated from the transcription; this tool burns them into the video file. Works on either the cut video (if available) or the original video. This is a long-running operation with progress updates.',
     input_schema: {
       type: 'object' as const,
       properties: {

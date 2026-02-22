@@ -725,8 +725,8 @@ export function UnifiedProjectPanel({ projectId, refreshTrigger }: UnifiedProjec
                   {status === 'transcribing' && 'Transcribing video...'}
                   {status === 'analyzing' && 'Analyzing transcript...'}
                   {status === 'cutting' && 'Cutting video...'}
-                  {status === 'cut' && !subtitles && 'Generating subtitles...'}
-                  {!['transcribing', 'analyzing', 'cutting', 'cut'].includes(status || '') && 
+                  {(status === 'cut' || status === 'burning') && !subtitles && 'Generating subtitles...'}
+                  {!['transcribing', 'analyzing', 'cutting', 'cut', 'burning'].includes(status || '') &&
                     'Transcription will appear here'}
                 </div>
               </div>
