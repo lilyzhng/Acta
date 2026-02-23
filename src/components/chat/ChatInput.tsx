@@ -33,40 +33,34 @@ export function ChatInput({ onSend, disabled, pendingPanel, onConfirmPanel }: Ch
 
   const confirmLabel =
     pendingPanel === 'review'
-      ? 'Confirm Selections'
+      ? 'CONFIRM SELECTIONS'
       : pendingPanel === 'subtitle_editor'
-      ? 'Done Editing'
+      ? 'DONE EDITING'
       : null;
 
   return (
-    <div className="border-t border-neutral-800 p-3">
+    <div className="border-t border-[var(--retro-border)] p-3">
       {confirmLabel && onConfirmPanel && (
         <button
           onClick={onConfirmPanel}
           disabled={disabled}
-          className="w-full mb-2 py-2.5 bg-green-600 hover:bg-green-700 disabled:bg-neutral-700 text-white rounded-lg text-sm font-medium transition-colors"
+          className="w-full mb-2 py-2.5 border-2 border-[var(--retro-green)] text-[var(--retro-green)] hover:bg-[var(--retro-green)]/10 disabled:opacity-40 rounded-[2px] text-sm font-bold uppercase transition-colors"
         >
           {confirmLabel}
         </button>
       )}
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[var(--retro-amber)] font-bold text-sm whitespace-nowrap">&gt;</span>
         <textarea
           ref={inputRef}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={disabled ? 'Processing...' : 'Type a message...'}
+          placeholder={disabled ? 'Processing...' : ''}
           disabled={disabled}
           rows={1}
-          className="flex-1 px-3 py-2 bg-neutral-800 border border-neutral-700 rounded-lg text-sm text-white placeholder-neutral-500 resize-none focus:outline-none focus:border-purple-500 disabled:opacity-50"
+          className="flex-1 px-2 py-1 bg-transparent border-none text-sm text-[var(--retro-text-light)] placeholder-[var(--retro-text-light)]/30 resize-none focus:outline-none disabled:opacity-50"
         />
-        <button
-          onClick={handleSend}
-          disabled={disabled || !text.trim()}
-          className="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-neutral-700 text-white rounded-lg text-sm transition-colors"
-        >
-          Send
-        </button>
       </div>
     </div>
   );

@@ -22,16 +22,16 @@ export function LoadingOverlay({ show, title, percent = 0, elapsed = 0, remainin
 
   return (
     <div className="fixed inset-0 bg-black/85 z-50 flex flex-col items-center justify-center">
-      <div className="w-16 h-16 border-4 border-neutral-700 border-t-purple-600 rounded-full animate-spin" />
-      <div className="mt-5 text-lg text-white">{title}</div>
+      <div className="text-[var(--retro-green)] text-2xl font-bold animate-pulse">[PROCESSING]</div>
+      <div className="mt-5 text-lg text-[var(--retro-text-light)]">{title}</div>
       <div className="mt-5 w-72">
         <ProgressBar percent={percent} />
       </div>
-      <div className="mt-4 text-sm text-neutral-400">
+      <div className="mt-4 text-sm text-[var(--retro-text-light)]/60">
         Elapsed: {formatTime(elapsed)}
       </div>
       {remaining !== undefined && (
-        <div className="mt-2 text-sm text-neutral-500">
+        <div className="mt-2 text-sm text-[var(--retro-text-light)]/40">
           {remaining > 0 ? `Remaining: ~${formatTime(remaining)}` : 'Almost done...'}
         </div>
       )}

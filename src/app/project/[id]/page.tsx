@@ -33,6 +33,7 @@ export default function ProjectPage({
 
   // Resizable chat panel
   const [chatWidth, setChatWidth] = useState(380);
+  const [chatCollapsed, setChatCollapsed] = useState(false);
   const isDraggingRef = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -69,22 +70,24 @@ export default function ProjectPage({
   }, []);
 
   return (
-    <div ref={containerRef} className="flex h-screen bg-neutral-950">
+    <div ref={containerRef} className="flex h-screen bg-[var(--retro-beige)]">
       {/* Column 1 & 2: Video + Waveform | Transcription/Subtitles */}
       <div className="flex-1 overflow-hidden">
         <UnifiedProjectPanel projectId={projectId} refreshTrigger={refreshKey} />
       </div>
 
-      {/* Resize handle for chat panel */}
-      <div
-        onMouseDown={handleMouseDown}
-        className="w-1 bg-neutral-800 hover:bg-blue-500 cursor-col-resize flex-shrink-0 transition-colors"
-      />
+      {/* Resize handle for chat panel (hidden when collapsed) */}
+      {!chatCollapsed && (
+        <div
+          onMouseDown={handleMouseDown}
+          className="w-2 bg-[var(--retro-border)] hover:bg-[var(--retro-cyan)] cursor-col-resize flex-shrink-0 transition-colors z-10"
+        />
+      )}
 
       {/* Column 3: Chat panel */}
-      <div 
-        className="flex-shrink-0 flex flex-col border-l border-neutral-800"
-        style={{ width: chatWidth }}
+      <div
+        className="flex-shrink-0 flex flex-col overflow-hidden"
+        style={{ width: chatCollapsed ? 'auto' : chatWidth }}
       >
         <ChatPanel
           messages={messages}
@@ -92,6 +95,9 @@ export default function ProjectPage({
           pendingPanel={pendingPanel}
           onSendMessage={sendMessage}
           onConfirmPanel={() => {}}
+          collapsed={chatCollapsed}
+          onCollapse={() => setChatCollapsed(true)}
+          onExpand={() => setChatCollapsed(false)}
         />
       </div>
     </div>

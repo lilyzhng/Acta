@@ -13,19 +13,19 @@ export function ReviewControls({ onCut, onClear, onReset, isCutting }: ReviewCon
       <button
         onClick={onCut}
         disabled={isCutting}
-        className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-neutral-600 text-white rounded text-sm font-medium transition-colors"
+        className="px-4 py-2 bg-[var(--retro-charcoal)] border-2 border-[var(--retro-green)] text-[var(--retro-green)] hover:bg-[var(--retro-green)]/10 disabled:opacity-40 rounded-[2px] text-sm font-bold transition-colors uppercase"
       >
         {isCutting ? 'Cutting...' : 'Execute Cut'}
       </button>
       <button
         onClick={onReset}
-        className="px-4 py-2 bg-neutral-700 hover:bg-neutral-600 text-white rounded text-sm transition-colors"
+        className="px-4 py-2 bg-[var(--retro-charcoal)] border-2 border-[var(--retro-border)] text-[var(--retro-text-light)] hover:bg-[var(--retro-charcoal-light)] rounded-[2px] text-sm font-bold transition-colors"
       >
         Reset to AI
       </button>
       <button
         onClick={onClear}
-        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded text-sm transition-colors"
+        className="px-4 py-2 bg-[var(--retro-charcoal)] border-2 border-[var(--retro-red)] text-[var(--retro-red)] hover:bg-[var(--retro-red)]/10 rounded-[2px] text-sm font-bold transition-colors"
       >
         Clear All
       </button>

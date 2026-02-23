@@ -294,7 +294,7 @@ export function burnSubtitles(
     const escapedSrt = srtPath.replace(/([:\\'\[\]])/g, '\\$1');
     const args = [
       '-i', videoPath,
-      '-vf', `subtitles=${escapedSrt}:force_style='FontSize=22,FontName=PingFang SC,Bold=1,PrimaryColour=&H0000deff,OutlineColour=&H00000000,Outline=${outline},Alignment=2,MarginV=30'`,
+      '-vf', `subtitles=${escapedSrt}:force_style='FontSize=22,FontName=PingFang SC,Bold=1,PrimaryColour=&H00ffffff,OutlineColour=&H00000000,Outline=${outline},Alignment=2,MarginV=30'`,
       '-c:a', 'copy',
       '-y', outputPath,
     ];

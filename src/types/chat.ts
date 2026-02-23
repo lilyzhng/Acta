@@ -41,6 +41,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: ToolCallStatus[];
+  downloads?: DownloadPanelData;
   timestamp: number;
 }
 

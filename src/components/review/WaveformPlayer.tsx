@@ -71,7 +71,7 @@ export const WaveformPlayer = memo(function WaveformPlayer({
       regions.addRegion({
         start: seg.start,
         end: seg.end,
-        color: 'rgba(239, 68, 68, 0.35)',
+        color: 'rgba(255, 59, 59, 0.35)',
         drag: false,
         resize: false,
       });
@@ -89,23 +89,23 @@ export const WaveformPlayer = memo(function WaveformPlayer({
         import('wavesurfer.js'),
         import('wavesurfer.js/dist/plugins/regions.esm.js'),
       ]);
-      
+
       // Check if effect was cleaned up while we were loading
       if (cancelled) return;
-      
+
       const WaveSurfer = WaveSurferModule.default;
       const RegionsPlugin = RegionsModule.default;
       const regionsPlugin = RegionsPlugin.create();
 
       ws = WaveSurfer.create({
         container: containerRef.current!,
-        waveColor: '#4a9eff',
-        progressColor: '#1976D2',
-        cursorColor: '#fff',
+        waveColor: '#39FF14',
+        progressColor: '#00E5FF',
+        cursorColor: '#FFB800',
         height: 60,
         barWidth: 2,
         barGap: 1,
-        barRadius: 2,
+        barRadius: 0,
         barAlign: 'bottom',
         url: audioUrl,
         normalize: true,
@@ -170,10 +170,10 @@ export const WaveformPlayer = memo(function WaveformPlayer({
   return (
     <div>
       <div className="flex items-center justify-center gap-3 mb-3">
-        <span className="font-mono text-neutral-500 text-sm">{time}</span>
+        <span className="font-mono text-[var(--retro-text-light)]/50 text-sm">{time}</span>
         <button
           onClick={() => internalRef.current?.playPause()}
-          className="w-10 h-10 flex items-center justify-center rounded-full bg-neutral-700 hover:bg-neutral-600 text-white transition-colors"
+          className="w-10 h-10 flex items-center justify-center rounded-[2px] bg-[var(--retro-charcoal)] border-2 border-[var(--retro-green)] text-[var(--retro-green)] hover:bg-[var(--retro-charcoal-light)] transition-colors"
           aria-label={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? (
@@ -189,7 +189,7 @@ export const WaveformPlayer = memo(function WaveformPlayer({
         <select
           value={speed}
           onChange={handleSpeedChange}
-          className="px-2 py-1 bg-neutral-700 text-white border-none rounded text-sm cursor-pointer"
+          className="px-2 py-1 bg-[var(--retro-charcoal)] text-[var(--retro-text-light)] border-2 border-[var(--retro-border)] rounded-[2px] text-sm cursor-pointer"
         >
           <option value="0.5">0.5x</option>
           <option value="0.75">0.75x</option>
@@ -199,7 +199,7 @@ export const WaveformPlayer = memo(function WaveformPlayer({
           <option value="2">2x</option>
         </select>
       </div>
-      <div ref={containerRef} className="bg-neutral-800 rounded" />
+      <div ref={containerRef} className="bg-[var(--retro-charcoal)] rounded-[2px]" />
     </div>
   );
 });

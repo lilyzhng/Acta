@@ -153,6 +153,16 @@ export function useChatAgent(projectId: string) {
                 type: event.panel as PanelState['type'],
                 data: event.data as PanelState['data'],
               });
+              // Attach download data to current assistant message for inline rendering
+              if (event.panel === 'download' && currentAssistantId) {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === currentAssistantId
+                      ? { ...m, downloads: event.data as import('@/types').DownloadPanelData }
+                      : m,
+                  ),
+                );
+              }
               break;
             }
 
@@ -189,19 +199,21 @@ export function useChatAgent(projectId: string) {
   );
 
   const sendMessage = useCallback(
-    async (text: string) => {
+    async (text: string, { hidden = false }: { hidden?: boolean } = {}) => {
       if (isStreaming) return;
 
-      // Add user message to display
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: generateId(),
-          role: 'user',
-          content: text,
-          timestamp: Date.now(),
-        },
-      ]);
+      // Add user message to display (skip for hidden/auto-init messages)
+      if (!hidden) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: generateId(),
+            role: 'user',
+            content: text,
+            timestamp: Date.now(),
+          },
+        ]);
+      }
 
       setIsStreaming(true);
       abortRef.current = new AbortController();
@@ -284,7 +296,7 @@ export function useChatAgent(projectId: string) {
   useEffect(() => {
     if (initializedRef.current) return;
     initializedRef.current = true;
-    sendMessage('What is the current status of this project?');
+    sendMessage('Hey', { hidden: true });
   }, [sendMessage]);
 
   return {

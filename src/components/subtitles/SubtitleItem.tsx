@@ -43,17 +43,17 @@ export const SubtitleItem = memo(function SubtitleItem({
   return (
     <div
       data-sub-idx={index}
-      className={`px-4 py-3 border-b border-neutral-800 cursor-pointer transition-colors ${
-        isActive ? 'bg-blue-900/30 border-l-2 border-l-green-500' : 'hover:bg-neutral-800/50'
-      } ${isEditing ? 'bg-blue-900/20' : ''}`}
+      className={`px-4 py-3 border-b border-[var(--retro-border)] cursor-pointer transition-colors ${
+        isActive ? 'bg-[var(--retro-green)]/5 border-l-2 border-l-[var(--retro-green)]' : 'hover:bg-[var(--retro-charcoal-light)]'
+      } ${isEditing ? 'bg-[var(--retro-cyan)]/5' : ''}`}
       onClick={() => {
         if (!isEditing) onJump(subtitle.start);
       }}
     >
-      <div className="text-xs text-neutral-500 font-mono mb-1">
+      <div className="text-xs text-[var(--retro-text-light)]/40 font-mono mb-1">
         {index + 1}. {formatTime(subtitle.start)} &rarr; {formatTime(subtitle.end)}
       </div>
-      <div className="text-sm">
+      <div className="text-sm text-[var(--retro-text-light)]">
         {isEditing ? (
           <input
             ref={inputRef}
@@ -64,7 +64,7 @@ export const SubtitleItem = memo(function SubtitleItem({
             onKeyDown={(e) => {
               if (e.key === 'Enter') handleFinishEdit();
             }}
-            className="w-full px-2 py-1 bg-neutral-700 border border-green-600 rounded text-white text-sm"
+            className="w-full px-2 py-1 bg-[var(--retro-charcoal)] border-2 border-[var(--retro-cyan)] rounded-[2px] text-[var(--retro-text-light)] text-sm"
           />
         ) : (
           <span onDoubleClick={() => setIsEditing(true)}>{subtitle.text}</span>
